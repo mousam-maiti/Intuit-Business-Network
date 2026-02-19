@@ -1,0 +1,50 @@
+/* ── QuickBooks Brand Design Tokens ──────────────────── */
+
+:root {
+  /* Primary */
+  --qb-green:          #2CA01C;
+  --qb-green-dark:     #108000;
+  --qb-green-light:    #D4F7D0;
+  --qb-purple:         #7C3AED;
+  --qb-purple-dark:    #5B21B6;
+  --qb-purple-light:   #EDE9FE;
+  --qb-cyan:           #00B4D8;
+
+  /* Status */
+  --qb-orange:         #E8710A;
+  --qb-orange-light:   #FFF3E0;
+  --qb-red:            #DC2626;
+  --qb-red-light:      #FEE2E2;
+  --qb-dormant:        #C4C4C4;
+
+  /* Chrome */
+  --qb-sidebar:        #1B2028;
+  --qb-sidebar-hover:  #2A313B;
+  --qb-sidebar-active: #343D49;
+  --qb-topbar:         #FFFFFF;
+  --qb-content-bg:     #F4F5F7;
+
+  /* Surface */
+  --qb-card-bg:        #FFFFFF;
+  --qb-card-border:    #E3E8EE;
+
+  /* Typography */
+  --qb-text-primary:   #393A3D;
+  --qb-text-secondary: #6B6C72;
+  --qb-text-muted:     #8C8C8C;
+  --qb-link:           #0077C5;
+
+  /* Spacing */
+  --page-px:           1.5rem;
+  --card-radius:       2px;
+  --badge-radius:      4px;
+
+  /* Shadows */
+  --shadow-sm:         0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md:         0 4px 12px rgba(0,0,0,0.1);
+  --shadow-xl:         0 20px 60px rgba(0,0,0,0.15);
+
+  /* Transitions */
+  --transition-fast:   150ms ease;
+  --transition-normal: 300ms ease;
+}
