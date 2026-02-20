@@ -1,12 +1,13 @@
-import { useState, useCallback } from 'react';
-import { Eye, EyeOff, X, Navigation, Sparkles, Building2 } from 'lucide-react';
+import { useState, useCallback, useMemo } from 'react';
+import { Eye, EyeOff, X, Navigation, User, Globe } from 'lucide-react';
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from 'recharts';
 import { QB } from '@/constants/colors';
-import { getIndustry } from '@/constants/industries';
-import { fmt } from '@/utils/format';
+import { PERSPECTIVE } from '@/constants/perspective';
 import { findPath } from '@/utils/graph';
-import { ENTITIES, RELATIONSHIPS, MONTHLY_VOLUME } from '@/api/mock/data';
-import { Widget } from '@/components/shared';
+import { getNativeFields } from '@/utils/perspective';
+import { ENTITIES, RELATIONSHIPS, MONTHLY_VOLUME, NATIVE_OVERRIDES, NATIVE_MERGES } from '@/api/mock/data';
+import { saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
+import { Widget, EntityDetailPanel, MergeFlowModal } from '@/components/shared';
 import { NetworkGraph } from './components/NetworkGraph';
 
 export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, privacy }) {
@@ -17,7 +18,55 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, privac
   const [pathStart, setPathStart] = useState(null);
   const [pathEnd, setPathEnd] = useState(null);
   const [pathResult, setPathResult] = useState(null);
-  const [showProfile, setShowProfile] = useState(false);
+  const [nativeOverrides, setNativeOverrides] = useState(NATIVE_OVERRIDES);
+  const [nativeMerges, setNativeMerges] = useState(NATIVE_MERGES);
+  const [mergeSource, setMergeSource] = useState(null);
+  const [perspective, setPerspective] = useState(PERSPECTIVE.NATIVE);
+
+  const isNativeView = perspective === PERSPECTIVE.NATIVE;
+
+  // When viewing Network perspective, strip all native overlays
+  const activeOverrides = isNativeView ? nativeOverrides : {};
+  const activeMerges = isNativeView ? nativeMerges : [];
+
+  const nativeOverride = selectedEntity ? (activeOverrides[selectedEntity.id] || null) : null;
+
+  // Count native modifications for the toggle label
+  const nativeCount = useMemo(() => {
+    const overrideCount = Object.keys(nativeOverrides).length;
+    const mergeCount = nativeMerges.length;
+    return overrideCount + mergeCount;
+  }, [nativeOverrides, nativeMerges]);
+
+  const handleSaveNative = useCallback(async (entityId, overrides) => {
+    if (overrides) {
+      await saveNativeOverride(entityId, overrides);
+      setNativeOverrides((prev) => ({ ...prev, [entityId]: overrides }));
+    } else {
+      setNativeOverrides((prev) => { const next = { ...prev }; delete next[entityId]; return next; });
+    }
+  }, []);
+
+  const handleConfirmMerge = useCallback(async (source, target, reason, mergeResolution) => {
+    // Apply per-field resolution as native overrides on the surviving entity
+    if (mergeResolution && Object.keys(mergeResolution).length > 0) {
+      const merged = { ...(nativeOverrides[target.id] || {}), ...mergeResolution };
+      await saveNativeOverride(target.id, merged);
+      setNativeOverrides((prev) => ({ ...prev, [target.id]: { ...prev[target.id], ...mergeResolution } }));
+    }
+    const sourceRels = RELATIONSHIPS.filter((r) => r.source === source.id || r.target === source.id);
+    const result = await createNativeMerge({
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      reason,
+      migratedRelationships: sourceRels.map((r) => ({ source: r.source, target: r.target })),
+    });
+    return result.data;
+  }, [nativeOverrides]);
+
+  const handleUndoMerge = useCallback(async (mergeId) => {
+    await undoNativeMerge(mergeId);
+  }, []);
 
   const handlePathSelect = useCallback((id) => {
     if (!pathStart) {
@@ -67,6 +116,35 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, privac
               </button>
             ))}
           </div>
+          <span className="text-[1px]" style={{ color: QB.cardBorder }}>|</span>
+          <div className="flex border rounded" style={{ borderColor: isNativeView ? QB.purple + '50' : QB.cardBorder }}>
+            <button
+              onClick={() => setPerspective(PERSPECTIVE.NATIVE)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs transition-colors"
+              style={{
+                backgroundColor: isNativeView ? QB.purple : 'white',
+                color: isNativeView ? 'white' : QB.textSecondary,
+                borderRight: '1px solid ' + (isNativeView ? QB.purple : QB.cardBorder),
+              }}
+            >
+              <User size={10} /> My View
+              {isNativeView && nativeCount > 0 && (
+                <span className="text-[9px] px-1 rounded-full" style={{ backgroundColor: 'rgba(255,255,255,0.25)' }}>
+                  {nativeCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setPerspective(PERSPECTIVE.GLOBAL)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs transition-colors"
+              style={{
+                backgroundColor: !isNativeView ? QB.link : 'white',
+                color: !isNativeView ? 'white' : QB.textSecondary,
+              }}
+            >
+              <Globe size={10} /> Network
+            </button>
+          </div>
         </div>
       </div>
 
@@ -90,66 +168,23 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, privac
         <div className="flex-1">
           <NetworkGraph selectedId={selectedEntity?.id} onSelect={onSelect} depth={depth}
             pathNodes={pathResult} pathMode={pathMode} onPathSelect={handlePathSelect}
-            edgeFilter={edgeFilter} showDormant={showDormant} privacy={privacy} />
+            edgeFilter={edgeFilter} showDormant={showDormant} privacy={privacy}
+            nativeOverrides={activeOverrides} nativeMerges={activeMerges} />
         </div>
 
         {selectedEntity && (
           <div className="w-80 flex flex-col gap-3 overflow-y-auto">
-            {/* Entity details */}
-            <Widget title="SELECTED ENTITY" action={
-              <button onClick={() => setShowProfile(!showProfile)} className="text-[10px]" style={{ color: QB.link }}>
-                {showProfile ? 'Less' : 'Full profile'} {showProfile ? '\u25B4' : '\u25BE'}
-              </button>
-            }>
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-9 h-9 rounded flex items-center justify-center" style={{ backgroundColor: getIndustry(selectedEntity.industry).color + '15' }}>
-                  <Building2 size={16} style={{ color: getIndustry(selectedEntity.industry).color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate" style={{ color: QB.textPrimary }}>{selectedEntity.name}</div>
-                  <div className="text-[11px]" style={{ color: QB.textMuted }}>{getIndustry(selectedEntity.industry).label} &middot; {selectedEntity.city}, {selectedEntity.state}</div>
-                </div>
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                  style={{ backgroundColor: selectedEntity.confidence >= 0.9 ? QB.greenLight : QB.orangeLight, color: selectedEntity.confidence >= 0.9 ? QB.greenDark : QB.orange }}>
-                  {Math.round(selectedEntity.confidence * 100)}%
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                {[{ l: 'Vendors', v: selectedEntity.vendors, c: QB.purple }, { l: 'Clients', v: selectedEntity.clients, c: QB.green }, { l: 'Volume', v: fmt(selectedEntity.volume), c: QB.link }].map((s, i) => (
-                  <div key={i} className="text-center py-2 rounded" style={{ backgroundColor: '#F4F5F7' }}>
-                    <div className="text-sm font-semibold" style={{ color: s.c }}>{s.v}</div>
-                    <div className="text-[10px]" style={{ color: QB.textMuted }}>{s.l}</div>
-                  </div>
-                ))}
-              </div>
-              {showProfile && (
-                <div className="space-y-2.5 pt-2 border-t" style={{ borderColor: QB.cardBorder }}>
-                  <div className="text-[10px] font-semibold tracking-wider" style={{ color: QB.textMuted, letterSpacing: '0.08em' }}>ENTITY PERSONA</div>
-                  {[
-                    { l: 'Legal structure', v: selectedEntity.legalStructure },
-                    { l: 'NAICS code', v: selectedEntity.naics + ' \u2014 ' + getIndustry(selectedEntity.industry).label },
-                    { l: 'Service area', v: selectedEntity.serviceArea },
-                    { l: 'Name variants', v: selectedEntity.variants.map((v) => '"' + v + '"').join(', ') },
-                  ].map((row, i) => (
-                    <div key={i} className="text-xs">
-                      <span style={{ color: QB.textMuted }}>{row.l}: </span>
-                      <span style={{ color: QB.textPrimary }}>{row.v}</span>
-                    </div>
-                  ))}
-                  <div className="text-xs">
-                    <span style={{ color: QB.textMuted }}>Commodities: </span>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedEntity.commodities.map((c, i) => (
-                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: '#F0F1F3', color: QB.textSecondary }}>{c}</span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-              <button onClick={() => onOpenAI?.(selectedEntity)} className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-3" style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>
-                <Sparkles size={11} /> Ask Intuit Assist
-              </button>
-            </Widget>
+            <EntityDetailPanel
+              globalEntity={selectedEntity}
+              nativeOverride={nativeOverride}
+              onSaveNative={handleSaveNative}
+              onOpenAI={onOpenAI}
+              onMerge={() => setMergeSource(selectedEntity)}
+              onSelectEntity={onSelect}
+              vendorRels={vendorRels}
+              clientRels={clientRels}
+              allEntities={ENTITIES}
+            />
 
             <Widget title="TRANSACTION VOLUME">
               <div className="h-20">
@@ -163,41 +198,21 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, privac
                 </ResponsiveContainer>
               </div>
             </Widget>
-
-            <Widget title={'VENDORS (' + vendorRels.length + ')'}>
-              <div className="space-y-1.5">
-                {vendorRels.slice(0, 4).map((rel, i) => {
-                  const o = ENTITIES.find((e) => e.id === rel.target);
-                  return (
-                    <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b cursor-pointer hover:bg-gray-50 -mx-1 px-1 rounded" style={{ borderColor: '#F0F0F0' }} onClick={() => o && onSelect(o)}>
-                      <span className="text-[10px] px-1 py-0.5 rounded font-medium" style={{ backgroundColor: QB.purpleLight, color: QB.purpleDark }}>{'\u2190'} V</span>
-                      <span className="flex-1 truncate" style={{ color: QB.textPrimary }}>{o?.name}</span>
-                      {rel.status === 'dormant' && <span className="text-[9px] px-1 rounded" style={{ backgroundColor: '#F0F0F0', color: QB.dormant }}>dormant</span>}
-                      <span style={{ color: QB.textMuted }}>{fmt(rel.volume)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </Widget>
-
-            <Widget title={'CLIENTS (' + clientRels.length + ')'}>
-              <div className="space-y-1.5">
-                {clientRels.slice(0, 4).map((rel, i) => {
-                  const o = ENTITIES.find((e) => e.id === rel.source);
-                  return (
-                    <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b cursor-pointer hover:bg-gray-50 -mx-1 px-1 rounded" style={{ borderColor: '#F0F0F0' }} onClick={() => o && onSelect(o)}>
-                      <span className="text-[10px] px-1 py-0.5 rounded font-medium" style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>{'\u2192'} C</span>
-                      <span className="flex-1 truncate" style={{ color: QB.textPrimary }}>{o?.name}</span>
-                      {rel.status === 'dormant' && <span className="text-[9px] px-1 rounded" style={{ backgroundColor: '#F0F0F0', color: QB.dormant }}>dormant</span>}
-                      <span style={{ color: QB.textMuted }}>{fmt(rel.volume)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </Widget>
           </div>
         )}
       </div>
+
+      {/* Merge flow modal */}
+      {mergeSource && (
+        <MergeFlowModal
+          sourceEntity={mergeSource}
+          allEntities={ENTITIES}
+          relationships={RELATIONSHIPS}
+          onConfirmMerge={handleConfirmMerge}
+          onUndoMerge={handleUndoMerge}
+          onClose={() => setMergeSource(null)}
+        />
+      )}
     </div>
   );
 }

@@ -6,3 +6,4 @@ export * as matchingApi from './matching';
 export * as searchApi from './search';
 export * as connectionsApi from './connections';
 export * as aiApi from './ai';
+export * as nativeApi from './native';

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, X, Check, XCircle, Zap, Building2, Tag, MapPin,
   UserPlus, Sparkles, Receipt, Activity, Layers, Target,
@@ -7,15 +7,46 @@ import {
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
-import { ENTITIES, RELATIONSHIPS, AUTO_DETECTED, MANUAL_ADDED } from '@/api/mock/data';
-import { Widget, ScoreBar, RelTypeBadge } from '@/components/shared';
+import { ENTITIES, RELATIONSHIPS, AUTO_DETECTED, MANUAL_ADDED, NATIVE_OVERRIDES } from '@/api/mock/data';
+import { saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
+import { Widget, ScoreBar, RelTypeBadge, EntityDetailPanel, MergeFlowModal } from '@/components/shared';
 
 export default function ConnectionsPage({ onNavigate }) {
   const [autoConns, setAutoConns] = useState(AUTO_DETECTED);
   const [manualConns, setManualConns] = useState(MANUAL_ADDED);
   const [showModal, setShowModal] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState(null);
-  const [showProfile, setShowProfile] = useState(false);
+  const [nativeOverrides, setNativeOverrides] = useState(NATIVE_OVERRIDES);
+  const [mergeSource, setMergeSource] = useState(null);
+
+  const handleSaveNative = useCallback(async (entityId, overrides) => {
+    if (overrides) {
+      await saveNativeOverride(entityId, overrides);
+      setNativeOverrides((prev) => ({ ...prev, [entityId]: overrides }));
+    } else {
+      setNativeOverrides((prev) => { const next = { ...prev }; delete next[entityId]; return next; });
+    }
+  }, []);
+
+  const handleConfirmMerge = useCallback(async (source, target, reason, mergeResolution) => {
+    if (mergeResolution && Object.keys(mergeResolution).length > 0) {
+      const merged = { ...(nativeOverrides[target.id] || {}), ...mergeResolution };
+      await saveNativeOverride(target.id, merged);
+      setNativeOverrides((prev) => ({ ...prev, [target.id]: { ...prev[target.id], ...mergeResolution } }));
+    }
+    const sourceRels = RELATIONSHIPS.filter((r) => r.source === source.id || r.target === source.id);
+    const result = await createNativeMerge({
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      reason,
+      migratedRelationships: sourceRels.map((r) => ({ source: r.source, target: r.target })),
+    });
+    return result.data;
+  }, [nativeOverrides]);
+
+  const handleUndoMerge = useCallback(async (mergeId) => {
+    await undoNativeMerge(mergeId);
+  }, []);
 
   // Manual add state
   const [name, setName] = useState("");
@@ -500,88 +531,31 @@ export default function ConnectionsPage({ onNavigate }) {
         {/* Entity details panel */}
         {selectedEntity && (
           <div className="w-80 flex flex-col gap-3 overflow-y-auto shrink-0">
-            <Widget title="SELECTED ENTITY" action={
-              <button onClick={() => setShowProfile(!showProfile)} className="text-[10px]" style={{ color: QB.link }}>
-                {showProfile ? 'Less' : 'Full profile'} {showProfile ? '\u25B4' : '\u25BE'}
-              </button>
-            }>
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-9 h-9 rounded flex items-center justify-center" style={{ backgroundColor: getIndustry(selectedEntity.industry).color + '15' }}>
-                  <Building2 size={16} style={{ color: getIndustry(selectedEntity.industry).color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate" style={{ color: QB.textPrimary }}>{selectedEntity.name}</div>
-                  <div className="text-[11px]" style={{ color: QB.textMuted }}>{getIndustry(selectedEntity.industry).label} &middot; {selectedEntity.city}, {selectedEntity.state}</div>
-                </div>
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                  style={{ backgroundColor: selectedEntity.confidence >= 0.9 ? QB.greenLight : QB.orangeLight, color: selectedEntity.confidence >= 0.9 ? QB.greenDark : QB.orange }}>
-                  {Math.round(selectedEntity.confidence * 100)}%
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                {[{ l: 'Vendors', v: selectedEntity.vendors, c: QB.purple }, { l: 'Clients', v: selectedEntity.clients, c: QB.green }, { l: 'Volume', v: fmt(selectedEntity.volume), c: QB.link }].map((s, i) => (
-                  <div key={i} className="text-center py-2 rounded" style={{ backgroundColor: '#F4F5F7' }}>
-                    <div className="text-sm font-semibold" style={{ color: s.c }}>{s.v}</div>
-                    <div className="text-[10px]" style={{ color: QB.textMuted }}>{s.l}</div>
-                  </div>
-                ))}
-              </div>
-              {showProfile && (
-                <div className="space-y-2.5 pt-2 border-t" style={{ borderColor: QB.cardBorder }}>
-                  <div className="text-[10px] font-semibold tracking-wider" style={{ color: QB.textMuted, letterSpacing: '0.08em' }}>ENTITY PERSONA</div>
-                  {[
-                    { l: 'Legal structure', v: selectedEntity.legalStructure },
-                    { l: 'NAICS code', v: selectedEntity.naics + ' \u2014 ' + getIndustry(selectedEntity.industry).label },
-                    { l: 'Service area', v: selectedEntity.serviceArea },
-                    { l: 'Name variants', v: (selectedEntity.variants || []).map((v) => '"' + v + '"').join(', ') },
-                  ].map((row, i) => (
-                    <div key={i} className="text-xs">
-                      <span style={{ color: QB.textMuted }}>{row.l}: </span>
-                      <span style={{ color: QB.textPrimary }}>{row.v}</span>
-                    </div>
-                  ))}
-                  {selectedEntity.commodities && (
-                    <div className="text-xs">
-                      <span style={{ color: QB.textMuted }}>Commodities: </span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {selectedEntity.commodities.map((c, i) => (
-                          <span key={i} className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: '#F0F1F3', color: QB.textSecondary }}>{c}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Widget>
-
-            <Widget title="RELATIONSHIPS">
-              <div className="space-y-1.5">
-                {RELATIONSHIPS.filter((r) => r.source === selectedEntity.id || r.target === selectedEntity.id)
-                  .sort((a, b) => b.volume - a.volume)
-                  .slice(0, 6)
-                  .map((rel, i) => {
-                    const isVendor = rel.target === selectedEntity.id;
-                    const otherId = isVendor ? rel.source : rel.target;
-                    const other = ENTITIES.find((e) => e.id === otherId);
-                    return (
-                      <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b cursor-pointer hover:bg-gray-50 -mx-1 px-1 rounded"
-                        style={{ borderColor: '#F0F0F0' }}
-                        onClick={() => other && setSelectedEntity(other)}>
-                        <span className="text-[10px] px-1 py-0.5 rounded font-medium"
-                          style={{ backgroundColor: isVendor ? QB.purpleLight : QB.greenLight, color: isVendor ? QB.purpleDark : QB.greenDark }}>
-                          {isVendor ? '\u2190 V' : '\u2192 C'}
-                        </span>
-                        <span className="flex-1 truncate" style={{ color: QB.textPrimary }}>{other?.name}</span>
-                        {rel.status === 'dormant' && <span className="text-[9px] px-1 rounded" style={{ backgroundColor: '#F0F0F0', color: QB.dormant }}>dormant</span>}
-                        <span style={{ color: QB.textMuted }}>{fmt(rel.volume)}</span>
-                      </div>
-                    );
-                  })}
-              </div>
-            </Widget>
+            <EntityDetailPanel
+              globalEntity={selectedEntity}
+              nativeOverride={nativeOverrides[selectedEntity.id] || null}
+              onSaveNative={handleSaveNative}
+              onMerge={() => setMergeSource(selectedEntity)}
+              onSelectEntity={setSelectedEntity}
+              vendorRels={RELATIONSHIPS.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              clientRels={RELATIONSHIPS.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              allEntities={ENTITIES}
+            />
           </div>
         )}
       </div>
+
+      {/* Merge flow modal */}
+      {mergeSource && (
+        <MergeFlowModal
+          sourceEntity={mergeSource}
+          allEntities={ENTITIES}
+          relationships={RELATIONSHIPS}
+          onConfirmMerge={handleConfirmMerge}
+          onUndoMerge={handleUndoMerge}
+          onClose={() => setMergeSource(null)}
+        />
+      )}
     </div>
   );
 }

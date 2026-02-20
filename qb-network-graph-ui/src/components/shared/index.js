@@ -5,3 +5,5 @@ export { AIChatMessages } from './AIChatMessages';
 export { AIChatInput } from './AIChatInput';
 export { AIPanel } from './AIPanel';
 export { MergeNotification } from './MergeNotification';
+export { EntityDetailPanel } from './EntityDetailPanel';
+export { MergeFlowModal } from './MergeFlowModal';

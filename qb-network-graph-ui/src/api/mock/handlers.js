@@ -1,6 +1,7 @@
 import {
   ENTITIES, RELATIONSHIPS, MONTHLY_VOLUME, PENDING_MATCHES,
   AUTO_DETECTED, MANUAL_ADDED, AI_TOOLS,
+  NATIVE_OVERRIDES, NATIVE_MERGES,
 } from './data';
 
 /** Simulate network latency */
@@ -166,6 +167,64 @@ export async function mockSearchEntities(query, filters = {}) {
   if (filters.sortBy === 'confidence') results.sort((a, b) => b.confidence - a.confidence);
   if (filters.sortBy === 'connections') results.sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients));
   return { data: results, total: results.length };
+}
+
+// ── Native Perspective ──────────────────────────────────
+
+const _overrides = { ...NATIVE_OVERRIDES };
+const _merges = [...NATIVE_MERGES];
+
+export async function mockGetNativeOverrides() {
+  await delay(80);
+  return { data: { ..._overrides } };
+}
+
+export async function mockGetNativeOverride(entityId) {
+  await delay(50);
+  return { data: _overrides[entityId] || null };
+}
+
+export async function mockSaveNativeOverride(entityId, fields) {
+  await delay(200);
+  _overrides[entityId] = { ...(_overrides[entityId] || {}), ...fields };
+  return { data: _overrides[entityId] };
+}
+
+export async function mockDeleteNativeOverride(entityId, field) {
+  await delay(100);
+  if (_overrides[entityId]) {
+    delete _overrides[entityId][field];
+    if (Object.keys(_overrides[entityId]).length === 0) delete _overrides[entityId];
+  }
+  return { data: _overrides[entityId] || null };
+}
+
+export async function mockGetNativeMerges() {
+  await delay(80);
+  return { data: [..._merges] };
+}
+
+export async function mockCreateNativeMerge(payload) {
+  await delay(300);
+  const merge = {
+    id: 'nm-' + Date.now(),
+    sourceEntityId: payload.sourceEntityId,
+    targetEntityId: payload.targetEntityId,
+    origin: 'user',
+    reason: payload.reason || '',
+    migratedRelationships: payload.migratedRelationships || [],
+    timestamp: new Date().toISOString(),
+  };
+  _merges.push(merge);
+  return { data: merge };
+}
+
+export async function mockUndoNativeMerge(mergeId) {
+  await delay(200);
+  const idx = _merges.findIndex((m) => m.id === mergeId);
+  if (idx === -1) throw new Error('Merge not found');
+  const removed = _merges.splice(idx, 1)[0];
+  return { data: removed };
 }
 
 // ── AI / Assist ─────────────────────────────────────────
