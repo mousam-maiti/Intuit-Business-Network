@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   X, Search, Building2, GitMerge, ArrowRight, Check, ChevronLeft,
-  AlertTriangle, Undo2, Sparkles, Users,
+  AlertTriangle, Undo2, Sparkles, Users, Bot, ThumbsUp, ThumbsDown, Minus,
 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
@@ -197,10 +197,206 @@ function MergeSearch({ sourceEntity, allEntities, relationships, onSelect, onCan
   );
 }
 
+// ── Inline Intuit Assist for merge decisions ────────────
+
+const ASSIST_TOOLS = [
+  { name: 'entity_profile', label: 'Loading entity profiles' },
+  { name: 'graph_overlap', label: 'Analyzing relationship overlap' },
+  { name: 'field_similarity', label: 'Computing field-level similarity' },
+  { name: 'merge_risk', label: 'Evaluating merge risk' },
+];
+
+function MergeAssist({ sourceEntity, targetEntity, sharedNeighborCount }) {
+  const [phase, setPhase] = useState(0); // 0 = running tools, 1..4 = tool steps, 5 = done
+  const [toolIdx, setToolIdx] = useState(0);
+
+  useEffect(() => {
+    if (toolIdx < ASSIST_TOOLS.length) {
+      const t = setTimeout(() => setToolIdx((i) => i + 1), 500 + Math.random() * 400);
+      return () => clearTimeout(t);
+    } else if (phase === 0) {
+      const t = setTimeout(() => setPhase(1), 600);
+      return () => clearTimeout(t);
+    }
+  }, [toolIdx, phase]);
+
+  // Compute mock analysis from actual entity data
+  const analysis = useMemo(() => {
+    const signals = [];
+    let score = 0;
+
+    // Industry
+    if (sourceEntity.industry === targetEntity.industry) {
+      signals.push({ positive: true, text: 'Same industry (' + getIndustry(sourceEntity.industry).label + ')' });
+      score += 25;
+    } else {
+      signals.push({ positive: false, text: 'Different industries (' + getIndustry(sourceEntity.industry).label + ' vs ' + getIndustry(targetEntity.industry).label + ')' });
+      score -= 15;
+    }
+
+    // Location
+    if (sourceEntity.state === targetEntity.state) {
+      score += 10;
+      if (sourceEntity.city === targetEntity.city) {
+        signals.push({ positive: true, text: 'Same city and state (' + sourceEntity.city + ', ' + sourceEntity.state + ')' });
+        score += 15;
+      } else {
+        signals.push({ positive: null, text: 'Same state but different cities (' + sourceEntity.city + ' vs ' + targetEntity.city + ')' });
+      }
+    } else {
+      signals.push({ positive: false, text: 'Different states (' + sourceEntity.state + ' vs ' + targetEntity.state + ')' });
+      score -= 10;
+    }
+
+    // EIN
+    if (sourceEntity.ein && targetEntity.ein) {
+      if (sourceEntity.ein === targetEntity.ein) {
+        signals.push({ positive: true, text: 'EIN match \u2014 strong identity signal' });
+        score += 30;
+      } else {
+        signals.push({ positive: false, text: 'Different EINs \u2014 likely distinct legal entities' });
+        score -= 20;
+      }
+    }
+
+    // Name similarity (rough word overlap)
+    const srcWords = new Set(sourceEntity.name.toLowerCase().split(/\s+/));
+    const tgtWords = new Set(targetEntity.name.toLowerCase().split(/\s+/));
+    const shared = [...srcWords].filter((w) => tgtWords.has(w) && w.length > 2);
+    if (shared.length > 0) {
+      signals.push({ positive: true, text: 'Shared name tokens: ' + shared.map((w) => '"' + w + '"').join(', ') });
+      score += shared.length * 8;
+    }
+
+    // Variants overlap
+    const srcVariants = (sourceEntity.variants || []).map((v) => v.toLowerCase());
+    const tgtVariants = (targetEntity.variants || []).map((v) => v.toLowerCase());
+    const variantOverlap = srcVariants.some((v) => tgtVariants.includes(v));
+    if (variantOverlap) {
+      signals.push({ positive: true, text: 'Matching name variant found' });
+      score += 15;
+    }
+
+    // Commodities overlap
+    const srcComm = new Set(sourceEntity.commodities || []);
+    const tgtComm = new Set(targetEntity.commodities || []);
+    const commOverlap = [...srcComm].filter((c) => tgtComm.has(c));
+    if (commOverlap.length > 0) {
+      signals.push({ positive: true, text: commOverlap.length + ' shared commodit' + (commOverlap.length === 1 ? 'y' : 'ies') + ': ' + commOverlap.join(', ') });
+      score += commOverlap.length * 5;
+    } else if (srcComm.size > 0 && tgtComm.size > 0) {
+      signals.push({ positive: false, text: 'No commodity overlap' });
+      score -= 5;
+    }
+
+    // Shared neighbors
+    if (sharedNeighborCount > 0) {
+      signals.push({ positive: true, text: sharedNeighborCount + ' shared network neighbor' + (sharedNeighborCount > 1 ? 's' : '') });
+      score += sharedNeighborCount * 7;
+    }
+
+    const clampedScore = Math.max(0, Math.min(100, 40 + score));
+    let verdict, verdictColor;
+    if (clampedScore >= 70) { verdict = 'Likely the same entity'; verdictColor = QB.green; }
+    else if (clampedScore >= 45) { verdict = 'Possible match \u2014 review carefully'; verdictColor = QB.orange; }
+    else { verdict = 'Probably different entities'; verdictColor = QB.red; }
+
+    return { score: clampedScore, signals, verdict, verdictColor };
+  }, [sourceEntity, targetEntity, sharedNeighborCount]);
+
+  const loading = phase === 0;
+
+  return (
+    <div className="rounded border overflow-hidden" style={{ borderColor: QB.green + '40', backgroundColor: QB.greenLight + '20' }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2" style={{ backgroundColor: QB.greenLight + '50' }}>
+        <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: QB.greenLight }}>
+          <Sparkles size={10} style={{ color: QB.green }} />
+        </div>
+        <span className="text-[11px] font-medium" style={{ color: QB.greenDark }}>Intuit Assist &mdash; Merge Analysis</span>
+      </div>
+
+      <div className="px-3 py-2.5 space-y-2">
+        {/* Tool calls */}
+        <div className="space-y-1">
+          {ASSIST_TOOLS.slice(0, toolIdx).map((t, i) => (
+            <div key={i} className="flex items-center gap-2 text-[10px]" style={{ color: QB.textSecondary }}>
+              <Check size={9} style={{ color: QB.green }} />
+              <span className="font-mono text-[9px]" style={{ color: QB.textMuted }}>{t.name}</span>
+              {t.label}
+            </div>
+          ))}
+          {loading && toolIdx < ASSIST_TOOLS.length && (
+            <div className="flex items-center gap-2 text-[10px]" style={{ color: QB.textMuted }}>
+              <span className="flex gap-0.5">
+                {[0, 150, 300].map((d) => (
+                  <span key={d} className="w-1 h-1 rounded-full animate-bounce inline-block" style={{ backgroundColor: QB.green, animationDelay: d + 'ms' }} />
+                ))}
+              </span>
+              {ASSIST_TOOLS[toolIdx].label}...
+            </div>
+          )}
+          {loading && toolIdx >= ASSIST_TOOLS.length && (
+            <div className="flex items-center gap-2 text-[10px]" style={{ color: QB.textMuted }}>
+              <span className="flex gap-0.5">
+                {[0, 150, 300].map((d) => (
+                  <span key={d} className="w-1 h-1 rounded-full animate-bounce inline-block" style={{ backgroundColor: QB.green, animationDelay: d + 'ms' }} />
+                ))}
+              </span>
+              Generating recommendation...
+            </div>
+          )}
+        </div>
+
+        {/* Analysis result */}
+        {!loading && (
+          <div className="space-y-2.5 pt-1">
+            {/* Verdict + score */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <Bot size={13} style={{ color: QB.green }} />
+                <span className="text-xs font-medium" style={{ color: analysis.verdictColor }}>
+                  {analysis.verdict}
+                </span>
+              </div>
+              <span className="text-xs font-bold ml-auto" style={{ color: analysis.verdictColor }}>
+                {analysis.score}%
+              </span>
+            </div>
+
+            {/* Signal bar */}
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#E5E7EB' }}>
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: analysis.score + '%', backgroundColor: analysis.verdictColor }} />
+            </div>
+
+            {/* Signals */}
+            <div className="space-y-1">
+              {analysis.signals.map((s, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-[10px]" style={{ color: QB.textSecondary }}>
+                  {s.positive === true && <ThumbsUp size={9} className="mt-0.5 shrink-0" style={{ color: QB.green }} />}
+                  {s.positive === false && <ThumbsDown size={9} className="mt-0.5 shrink-0" style={{ color: QB.red }} />}
+                  {s.positive === null && <Minus size={9} className="mt-0.5 shrink-0" style={{ color: QB.orange }} />}
+                  <span>{s.text}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="text-[9px] pt-1" style={{ color: QB.textMuted }}>
+              Powered by entity_profile + graph_overlap + field_similarity MCP tools &middot; 4 tool calls
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Step 2: Compare & Confirm (per-field resolution) ────
 
 function MergeCompare({ sourceEntity, targetEntity, relationships, allEntities, onConfirm, onBack }) {
   const [reason, setReason] = useState('');
+  const [showAssist, setShowAssist] = useState(false);
   const sourceInd = getIndustry(sourceEntity.industry);
   const targetInd = getIndustry(targetEntity.industry);
 
@@ -367,6 +563,23 @@ function MergeCompare({ sourceEntity, targetEntity, relationships, allEntities, 
             <AlertTriangle size={13} />
             <span>These entities have low similarity. Different industry and location. Are you sure they're the same?</span>
           </div>
+        )}
+
+        {/* Intuit Assist — merge advisor */}
+        {!showAssist ? (
+          <button
+            onClick={() => setShowAssist(true)}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded text-xs transition-colors hover:shadow-sm"
+            style={{ backgroundColor: QB.greenLight, color: QB.greenDark, border: '1px solid ' + QB.green + '30' }}
+          >
+            <Sparkles size={12} /> Not sure? Ask Intuit Assist
+          </button>
+        ) : (
+          <MergeAssist
+            sourceEntity={sourceEntity}
+            targetEntity={targetEntity}
+            sharedNeighborCount={sharedNeighborIds.length}
+          />
         )}
 
         {/* ── Per-field resolution: scalar fields ── */}

@@ -32,7 +32,7 @@ export function AIPanel({ open, onClose, chat, onGoFullPage }) {
           </button>
         </div>
       </div>
-      <AIChatMessages msgs={chat.msgs} typing={chat.typing} tools={chat.tools} onSetInput={chat.setInput} />
+      <AIChatMessages msgs={chat.msgs} typing={chat.typing} tools={chat.tools} onSetInput={chat.setInput} suggestions={chat.suggestions} context={chat.context} onAction={chat.onAction} />
       <AIChatInput input={chat.input} setInput={chat.setInput} send={chat.send} />
     </div>
   );

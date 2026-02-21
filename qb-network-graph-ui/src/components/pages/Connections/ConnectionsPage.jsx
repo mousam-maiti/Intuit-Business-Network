@@ -535,6 +535,7 @@ export default function ConnectionsPage({ onNavigate }) {
               globalEntity={selectedEntity}
               nativeOverride={nativeOverrides[selectedEntity.id] || null}
               onSaveNative={handleSaveNative}
+              onOpenAI={() => onNavigate('assist', selectedEntity)}
               onMerge={() => setMergeSource(selectedEntity)}
               onSelectEntity={setSelectedEntity}
               vendorRels={RELATIONSHIPS.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}

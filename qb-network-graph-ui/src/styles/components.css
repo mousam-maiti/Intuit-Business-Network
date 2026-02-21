@@ -25,6 +25,10 @@
   padding: 0 1.25rem 1rem;
 }
 
+.widget-body:first-child {
+  padding-top: 1rem;
+}
+
 /* Score bar */
 .score-bar-track {
   height: 6px;

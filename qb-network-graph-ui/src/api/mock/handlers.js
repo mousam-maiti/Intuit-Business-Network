@@ -3,6 +3,7 @@ import {
   AUTO_DETECTED, MANUAL_ADDED, AI_TOOLS,
   NATIVE_OVERRIDES, NATIVE_MERGES,
 } from './data';
+import { generateMockResponse } from './aiResponses';
 
 /** Simulate network latency */
 const delay = (ms = 200) => new Promise((r) => setTimeout(r, ms));
@@ -229,17 +230,6 @@ export async function mockUndoNativeMerge(mergeId) {
 
 // ── AI / Assist ─────────────────────────────────────────
 
-export async function mockSendAIQuery(message) {
-  // Returns tool call sequence, then final response
-  const tools = [...AI_TOOLS];
-  return {
-    data: {
-      tools,
-      response: {
-        content: 'I found 3 vendors that also serve businesses competing with you:',
-        entities: ['e3', 'e6', 'e7'],
-        followup: 'Metro Supplies Direct has the highest overlap \u2014 they serve both you and BuildRight Inc across 4 commodity categories.',
-      },
-    },
-  };
+export async function mockSendAIQuery(message, context = {}) {
+  return { data: generateMockResponse(message, context) };
 }

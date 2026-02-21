@@ -27,7 +27,7 @@ export default function DashboardPage({ onNavigate }) {
   ];
 
   const topHubs = useMemo(() =>
-    [...ENTITIES].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients)).slice(0, 5),
+    [...ENTITIES].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients)).slice(0, 3),
   []);
 
   return (
@@ -51,9 +51,9 @@ export default function DashboardPage({ onNavigate }) {
                 <div className="w-9 h-9 rounded flex items-center justify-center" style={{ backgroundColor: kpi.color + '12' }}>
                   <span style={{ color: kpi.color }}>{kpi.icon}</span>
                 </div>
-                <div>
-                  <div className="text-lg font-semibold" style={{ color: QB.textPrimary }}>{kpi.value}</div>
+                <div className="space-y-1">
                   <div className="text-[10px]" style={{ color: QB.textMuted }}>{kpi.label}</div>
+                  <div className="text-lg font-semibold leading-none" style={{ color: QB.textPrimary }}>{kpi.value}</div>
                 </div>
               </div>
             </Widget>

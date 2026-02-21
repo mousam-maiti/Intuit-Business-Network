@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, XCircle, RotateCcw, GitBranch } from 'lucide-react';
+import { Check, XCircle, GitBranch } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { PENDING_MATCHES } from '@/api/mock/data';
@@ -72,7 +72,6 @@ export default function ReviewPage() {
             <div className="flex gap-2 pt-3 border-t" style={{ borderColor: QB.cardBorder }}>
               <button onClick={() => act(m.id, 'merged')} className="flex-1 py-2 rounded text-xs font-medium text-white flex items-center justify-center gap-1" style={{ backgroundColor: QB.green }}><Check size={12} /> Merge</button>
               <button onClick={() => act(m.id, 'rejected')} className="flex-1 py-2 rounded text-xs font-medium border flex items-center justify-center gap-1" style={{ borderColor: '#FCA5A5', color: '#DC2626', backgroundColor: '#FEF2F2' }}><XCircle size={12} /> Reject</button>
-              <button className="py-2 px-3 rounded text-xs border" style={{ borderColor: QB.cardBorder, color: QB.textMuted }}><RotateCcw size={12} /></button>
             </div>
           </Widget>
         ))}

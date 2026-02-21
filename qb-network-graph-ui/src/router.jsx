@@ -31,7 +31,7 @@ function NetworkWrapper() {
       <NetworkPage
         selectedEntity={selectedEntity}
         onSelect={setSelectedEntity}
-        onOpenAI={() => goTo('assist')}
+        onOpenAI={() => goTo('assist', selectedEntity)}
         privacy={privacy}
       />
     </LazyWrap>
@@ -53,8 +53,8 @@ function ReviewWrapper() {
 }
 
 function AssistWrapper() {
-  const { chat } = useOutletContext();
-  return <LazyWrap><AssistPage chat={chat} /></LazyWrap>;
+  const { chat, setSelectedEntity } = useOutletContext();
+  return <LazyWrap><AssistPage chat={chat} onResetEntity={setSelectedEntity} /></LazyWrap>;
 }
 
 export const router = createBrowserRouter([

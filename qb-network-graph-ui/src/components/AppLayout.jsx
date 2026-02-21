@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Search, Home, Globe, UserPlus, ClipboardCheck, Sparkles,
@@ -23,7 +23,6 @@ const SIDEBAR_ICONS = {
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const chat = useAIChat();
 
   const [aiOpen, setAiOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -31,8 +30,46 @@ export default function AppLayout() {
   const [selectedEntity, setSelectedEntity] = useState(ENTITIES[0]);
   const [showMergeNotif, setShowMergeNotif] = useState(true);
 
-  // Current active route id
+  // Current active route id — computed before useAIChat so it can be passed as context
   const activeId = ROUTES.find((r) => r.path === location.pathname)?.id || 'dashboard';
+
+  const chat = useAIChat(selectedEntity, activeId);
+
+  const handleAction = (action, payload) => {
+    switch (action) {
+      case 'navigate':
+        navigate(viewToPath[payload.page] || '/');
+        setAiOpen(false);
+        break;
+      case 'select_entity': {
+        const entity = ENTITIES.find((e) => e.id === payload.entityId);
+        if (entity) setSelectedEntity(entity);
+        break;
+      }
+      case 'ask':
+        chat.setInput(payload.query);
+        break;
+    }
+  };
+
+  // Attach onAction to chat so components can access it
+  chat.onAction = handleAction;
+
+  // Dismiss notification on route change
+  const prevRoute = useRef(activeId);
+  useEffect(() => {
+    if (activeId !== prevRoute.current) {
+      setShowMergeNotif(false);
+      prevRoute.current = activeId;
+    }
+  }, [activeId]);
+
+  // Auto-dismiss notification after 10 seconds
+  useEffect(() => {
+    if (!showMergeNotif) return;
+    const t = setTimeout(() => setShowMergeNotif(false), 10000);
+    return () => clearTimeout(t);
+  }, [showMergeNotif]);
 
   // Connect WebSocket on mount
   useEffect(() => {
@@ -40,7 +77,8 @@ export default function AppLayout() {
     return () => wsManager.disconnect();
   }, []);
 
-  const goTo = (id) => {
+  const goTo = (id, entity) => {
+    setSelectedEntity(entity || ENTITIES[0]);
     navigate(viewToPath[id] || '/');
     setAiOpen(false);
   };
