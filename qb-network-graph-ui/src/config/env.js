@@ -3,6 +3,7 @@ export const config = {
   api: {
     baseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1',
     wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws',
+    chatWsUrl: import.meta.env.VITE_CHAT_WS_URL || 'ws://localhost:8082/ws',
   },
   ui: {
     port: parseInt(import.meta.env.VITE_PORT || '3000'),

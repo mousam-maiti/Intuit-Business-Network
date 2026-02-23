@@ -210,22 +210,31 @@ export function AIChatMessages({ msgs, typing, tools, onSetInput, suggestions, c
                   <div className="space-y-1.5">
                     {m.entities.map((eid) => {
                       const e = ENTITIES.find((x) => x.id === eid);
-                      if (!e) return null;
-                      const ind = getIndustry(e.industry);
-                      const dr = RELATIONSHIPS.find((r) => (r.source === 'e1' && r.target === e.id) || (r.target === 'e1' && r.source === e.id));
+                      if (e) {
+                        // Known mock entity — render rich card
+                        const ind = getIndustry(e.industry);
+                        const dr = RELATIONSHIPS.find((r) => (r.source === 'e1' && r.target === e.id) || (r.target === 'e1' && r.source === e.id));
+                        return (
+                          <div key={eid} className="flex items-center gap-3 p-3 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
+                            <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}>
+                              <Building2 size={14} style={{ color: ind.color }} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium" style={{ color: QB.link }}>{e.name}</div>
+                              <div className="text-[11px]" style={{ color: QB.textMuted }}>{ind.label} &middot; {e.city}, {e.state} &middot; {fmt(e.volume)}/yr</div>
+                            </div>
+                            {dr && <RelTypeBadge type={getRelType(dr, 'e1')} />}
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: e.confidence >= 0.9 ? QB.greenLight : QB.orangeLight, color: e.confidence >= 0.9 ? QB.greenDark : QB.orange }}>
+                              {Math.round(e.confidence * 100)}%
+                            </span>
+                          </div>
+                        );
+                      }
+                      // Real golden record ID — render compact badge
                       return (
-                        <div key={eid} className="flex items-center gap-3 p-3 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
-                          <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}>
-                            <Building2 size={14} style={{ color: ind.color }} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium" style={{ color: QB.link }}>{e.name}</div>
-                            <div className="text-[11px]" style={{ color: QB.textMuted }}>{ind.label} &middot; {e.city}, {e.state} &middot; {fmt(e.volume)}/yr</div>
-                          </div>
-                          {dr && <RelTypeBadge type={getRelType(dr, 'e1')} />}
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: e.confidence >= 0.9 ? QB.greenLight : QB.orangeLight, color: e.confidence >= 0.9 ? QB.greenDark : QB.orange }}>
-                            {Math.round(e.confidence * 100)}%
-                          </span>
+                        <div key={eid} className="inline-flex items-center gap-2 px-3 py-1.5 mr-1.5 mb-1 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
+                          <Building2 size={12} style={{ color: QB.green }} />
+                          <span className="font-mono text-[11px]" style={{ color: QB.link }}>{eid}</span>
                         </div>
                       );
                     })}
