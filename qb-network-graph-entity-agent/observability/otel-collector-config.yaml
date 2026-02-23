@@ -1,0 +1,127 @@
+# ============================================================
+# OTEL Collector — QB Network Graph Observability
+# ============================================================
+# Two pipelines:
+#
+# 1. Flink CDC (existing):
+#    Flink (:9249/metrics) → prometheus scraper → metrics pipeline
+#
+# 2. Entity Resolution Agent (new):
+#    Agent (Python OTEL SDK) → OTLP gRPC :4317 → traces + metrics
+#
+# Exports:
+#    traces  → Elasticsearch (agent-traces index)
+#    metrics → Prometheus :8889 (both Flink + agent)
+#    logs    → Elasticsearch (flink-logs index)
+# ============================================================
+
+receivers:
+  # Flink CDC — Prometheus scraping (existing)
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'flink'
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['host.docker.internal:9249']
+              labels:
+                service: qb-flink-cdc
+                environment: local-dev
+
+  # Agent Service — OTLP push (new)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+
+  # Tag all telemetry with environment
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local-dev
+        action: upsert
+
+  # Filter noisy JVM metrics from Flink
+  filter/flink:
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - ".*ClassLoading.*"
+          - ".*GarbageCollector.*"
+
+exporters:
+  # Traces → Elasticsearch → Kibana
+  elasticsearch/traces:
+    endpoints:
+      - http://qb-elasticsearch:9200
+    traces_index: agent-traces
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+    retry:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+
+  # Logs → Elasticsearch → Kibana
+  elasticsearch/logs:
+    endpoints:
+      - http://qb-elasticsearch:9200
+    logs_index: flink-logs
+    sending_queue:
+      enabled: true
+    retry:
+      enabled: true
+
+  # All metrics → Prometheus endpoint (Flink + Agent combined)
+  # View at: http://localhost:8889/metrics
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  pipelines:
+    # Flink CDC metrics (scraped)
+    metrics/flink:
+      receivers: [prometheus]
+      processors: [resource, filter/flink, batch]
+      exporters: [prometheus, debug]
+
+    # Agent metrics (pushed via OTLP)
+    metrics/agent:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [prometheus, debug]
+
+    # Agent traces (pushed via OTLP)
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [elasticsearch/traces]
+
+    # Logs (from any source)
+    logs:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [elasticsearch/logs]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

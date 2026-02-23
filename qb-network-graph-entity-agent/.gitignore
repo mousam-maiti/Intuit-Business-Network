@@ -1,0 +1,12 @@
+# Environment (contains API keys)
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime
+agent.log
+.agent.pid
