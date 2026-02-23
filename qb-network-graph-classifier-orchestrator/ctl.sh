@@ -127,7 +127,7 @@ start_process() {
     echo -e "  ${DIM}Log:   $LOG_FILE${NC}"
 
     cd "$SCRIPT_DIR"
-    nohup java -jar "$JAR" $args >> "$LOG_FILE" 2>&1 &
+    nohup java -jar "$JAR" $args > /dev/null 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 

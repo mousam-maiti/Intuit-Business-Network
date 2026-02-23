@@ -216,6 +216,7 @@ public class App {
             System.out.println("  ⚠  DRY RUN — no agent calls will be made");
         }
         System.out.println();
+        System.out.flush();
     }
 
     private static void printSummary(int totalRows, int classified, int skipped,
@@ -243,5 +244,6 @@ public class App {
             System.out.println("  Dead letters:         ./dead-letter/");
         }
         System.out.println();
+        System.out.flush();
     }
 }
