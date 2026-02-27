@@ -1,0 +1,17 @@
+# QB Network Graph Backend API — Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8087
+
+mysql:
+  host: localhost
+  port: 3306
+  user: qb_admin
+  password: qb_admin_pass
+  database: quickbooks
+  pool_size: 5
+
+entity_agent:
+  url: "http://localhost:8085"
+  timeout: 30

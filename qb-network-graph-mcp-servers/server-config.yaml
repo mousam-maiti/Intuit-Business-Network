@@ -3,7 +3,7 @@
 # MCP Server settings
 server:
   host: "0.0.0.0"
-  port: 8081
+  port: 8083
   name: qb-network-graph-mcp
 
 # Decision thresholds

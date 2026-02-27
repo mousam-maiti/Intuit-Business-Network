@@ -1,0 +1,30 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0011-create-cdc-reader
+      author: qb-network-graph
+      comment: >
+        CDC reader user with binlog replication + SELECT grants.
+        Requires SUPER or CREATE USER privilege — run as root if needed.
+        Uses ${CDC_READER_PASSWORD} Liquibase property.
+      changes:
+        - sql:
+            comment: "Create CDC reader user"
+            sql: >
+              CREATE USER IF NOT EXISTS 'cdc_reader'@'%' IDENTIFIED BY '${CDC_READER_PASSWORD}';
+        - sql:
+            comment: "Grant replication privileges"
+            sql: >
+              GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Grant read access to all QB tables"
+            sql: >
+              GRANT SELECT ON quickbooks.* TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Flush privileges"
+            sql: >
+              FLUSH PRIVILEGES;
+
+      rollback:
+        - sql:
+            sql: >
+              DROP USER IF EXISTS 'cdc_reader'@'%';

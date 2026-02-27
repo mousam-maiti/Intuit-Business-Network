@@ -1,0 +1,208 @@
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix qb:     <http://qb.intuit.com/ontology/> .
+@prefix naics:  <http://qb.intuit.com/naics/> .
+
+# ============================================================
+# NAICS HIERARCHY — Demo Subset
+#
+# Structure: Sector (2-digit) → Subsector (3-digit) →
+#            Industry Group (4-digit) → Industry (6-digit)
+#
+# Covers the key demo scenario: plumbing wholesaler (42)
+# vs plumbing contractor (23) linked via shared commodities.
+# ============================================================
+
+# --- Sector 23: Construction ---
+
+naics:23 a qb:NAICSCode ;
+    rdfs:label "Construction" .
+
+naics:236 a qb:NAICSCode ;
+    rdfs:label "Construction of Buildings" ;
+    rdfs:subClassOf naics:23 .
+
+naics:2361 a qb:NAICSCode ;
+    rdfs:label "Residential Building Construction" ;
+    rdfs:subClassOf naics:236 .
+
+naics:236110 a qb:NAICSCode ;
+    rdfs:label "Residential Building Construction" ;
+    rdfs:subClassOf naics:2361 .
+
+naics:236220 a qb:NAICSCode ;
+    rdfs:label "Commercial Building Construction" ;
+    rdfs:subClassOf naics:2361 .
+
+naics:238 a qb:NAICSCode ;
+    rdfs:label "Specialty Trade Contractors" ;
+    rdfs:subClassOf naics:23 .
+
+naics:2382 a qb:NAICSCode ;
+    rdfs:label "Building Equipment Contractors" ;
+    rdfs:subClassOf naics:238 .
+
+naics:238220 a qb:NAICSCode ;
+    rdfs:label "Plumbing, Heating, and Air-Conditioning Contractors" ;
+    rdfs:subClassOf naics:2382 .
+
+naics:238210 a qb:NAICSCode ;
+    rdfs:label "Electrical Contractors" ;
+    rdfs:subClassOf naics:2382 .
+
+naics:2381 a qb:NAICSCode ;
+    rdfs:label "Foundation, Structure, and Building Exterior Contractors" ;
+    rdfs:subClassOf naics:238 .
+
+naics:238110 a qb:NAICSCode ;
+    rdfs:label "Poured Concrete Foundation and Structure Contractors" ;
+    rdfs:subClassOf naics:2381 .
+
+naics:238120 a qb:NAICSCode ;
+    rdfs:label "Structural Steel and Precast Concrete Contractors" ;
+    rdfs:subClassOf naics:2381 .
+
+naics:2383 a qb:NAICSCode ;
+    rdfs:label "Building Finishing Contractors" ;
+    rdfs:subClassOf naics:238 .
+
+naics:238320 a qb:NAICSCode ;
+    rdfs:label "Painting and Wall Covering Contractors" ;
+    rdfs:subClassOf naics:2383 .
+
+naics:238330 a qb:NAICSCode ;
+    rdfs:label "Flooring Contractors" ;
+    rdfs:subClassOf naics:2383 .
+
+# --- Sector 42: Wholesale Trade ---
+
+naics:42 a qb:NAICSCode ;
+    rdfs:label "Wholesale Trade" .
+
+naics:423 a qb:NAICSCode ;
+    rdfs:label "Merchant Wholesalers, Durable Goods" ;
+    rdfs:subClassOf naics:42 .
+
+naics:4237 a qb:NAICSCode ;
+    rdfs:label "Hardware, Plumbing, Heating Equipment Wholesalers" ;
+    rdfs:subClassOf naics:423 .
+
+naics:423720 a qb:NAICSCode ;
+    rdfs:label "Plumbing and Heating Equipment and Supplies Wholesalers" ;
+    rdfs:subClassOf naics:4237 .
+
+naics:423710 a qb:NAICSCode ;
+    rdfs:label "Hardware Wholesalers" ;
+    rdfs:subClassOf naics:4237 .
+
+naics:4234 a qb:NAICSCode ;
+    rdfs:label "Professional and Commercial Equipment Wholesalers" ;
+    rdfs:subClassOf naics:423 .
+
+naics:423440 a qb:NAICSCode ;
+    rdfs:label "Other Commercial Equipment Wholesalers" ;
+    rdfs:subClassOf naics:4234 .
+
+naics:4233 a qb:NAICSCode ;
+    rdfs:label "Lumber and Other Construction Materials Wholesalers" ;
+    rdfs:subClassOf naics:423 .
+
+naics:423310 a qb:NAICSCode ;
+    rdfs:label "Lumber, Plywood, Millwork Wholesalers" ;
+    rdfs:subClassOf naics:4233 .
+
+naics:423320 a qb:NAICSCode ;
+    rdfs:label "Brick, Stone, and Related Construction Material Wholesalers" ;
+    rdfs:subClassOf naics:4233 .
+
+# --- Sector 44-45: Retail Trade ---
+
+naics:44 a qb:NAICSCode ;
+    rdfs:label "Retail Trade" .
+
+naics:444 a qb:NAICSCode ;
+    rdfs:label "Building Material and Garden Equipment Dealers" ;
+    rdfs:subClassOf naics:44 .
+
+naics:4441 a qb:NAICSCode ;
+    rdfs:label "Building Material and Supplies Dealers" ;
+    rdfs:subClassOf naics:444 .
+
+naics:444110 a qb:NAICSCode ;
+    rdfs:label "Home Centers" ;
+    rdfs:subClassOf naics:4441 .
+
+naics:444120 a qb:NAICSCode ;
+    rdfs:label "Paint and Wallpaper Stores" ;
+    rdfs:subClassOf naics:4441 .
+
+# --- Sector 72: Accommodation and Food Services ---
+
+naics:72 a qb:NAICSCode ;
+    rdfs:label "Accommodation and Food Services" .
+
+naics:722 a qb:NAICSCode ;
+    rdfs:label "Food Services and Drinking Places" ;
+    rdfs:subClassOf naics:72 .
+
+naics:7225 a qb:NAICSCode ;
+    rdfs:label "Restaurants and Other Eating Places" ;
+    rdfs:subClassOf naics:722 .
+
+naics:722511 a qb:NAICSCode ;
+    rdfs:label "Full-Service Restaurants" ;
+    rdfs:subClassOf naics:7225 .
+
+naics:722513 a qb:NAICSCode ;
+    rdfs:label "Limited-Service Restaurants" ;
+    rdfs:subClassOf naics:7225 .
+
+naics:722515 a qb:NAICSCode ;
+    rdfs:label "Snack and Nonalcoholic Beverage Bars" ;
+    rdfs:subClassOf naics:7225 .
+
+# --- Sector 81: Other Services ---
+
+naics:81 a qb:NAICSCode ;
+    rdfs:label "Other Services (except Public Administration)" .
+
+naics:811 a qb:NAICSCode ;
+    rdfs:label "Repair and Maintenance" ;
+    rdfs:subClassOf naics:81 .
+
+naics:8111 a qb:NAICSCode ;
+    rdfs:label "Automotive Repair and Maintenance" ;
+    rdfs:subClassOf naics:811 .
+
+naics:811111 a qb:NAICSCode ;
+    rdfs:label "General Automotive Repair" ;
+    rdfs:subClassOf naics:8111 .
+
+naics:811118 a qb:NAICSCode ;
+    rdfs:label "Other Automotive Mechanical and Electrical Repair" ;
+    rdfs:subClassOf naics:8111 .
+
+# --- Sector 54: Professional, Scientific, Technical Services ---
+
+naics:54 a qb:NAICSCode ;
+    rdfs:label "Professional, Scientific, and Technical Services" .
+
+naics:541 a qb:NAICSCode ;
+    rdfs:label "Professional, Scientific, and Technical Services" ;
+    rdfs:subClassOf naics:54 .
+
+naics:5412 a qb:NAICSCode ;
+    rdfs:label "Accounting, Tax Preparation, Bookkeeping" ;
+    rdfs:subClassOf naics:541 .
+
+naics:541211 a qb:NAICSCode ;
+    rdfs:label "Offices of Certified Public Accountants" ;
+    rdfs:subClassOf naics:5412 .
+
+naics:5411 a qb:NAICSCode ;
+    rdfs:label "Legal Services" ;
+    rdfs:subClassOf naics:541 .
+
+naics:541110 a qb:NAICSCode ;
+    rdfs:label "Offices of Lawyers" ;
+    rdfs:subClassOf naics:5411 .

@@ -68,6 +68,12 @@ class WSToolCall(BaseModel):
     result_preview: Optional[str] = None
 
 
+class WSThought(BaseModel):
+    type: str = "thought"
+    text: str
+    step: int = 0  # 1-indexed ReAct iteration number
+
+
 class AITable(BaseModel):
     headers: List[str]
     rows: List[List[str]]
@@ -106,6 +112,7 @@ class WSResponse(BaseModel):
     signals: Optional[List[AISignal]] = None
     actions: Optional[List[AIAction]] = None
     followup: Optional[str] = None
+    thought_steps: Optional[int] = None  # total ReAct iterations used
 
 
 class WSError(BaseModel):

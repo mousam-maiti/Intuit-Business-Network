@@ -4,10 +4,91 @@ import { ResponsiveContainer, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAx
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
-import { getRelType } from '@/utils/graph';
-import { RelTypeBadge } from './RelTypeBadge';
 import { ScoreBar } from './ScoreBar';
-import { ENTITIES, RELATIONSHIPS } from '@/api/mock/data';
+
+// ── Markdown renderer (lightweight, no dependencies) ─────
+
+function FormattedText({ text }) {
+  if (!text) return null;
+
+  // Split into paragraphs by double newlines
+  const paragraphs = text.split(/\n{2,}/);
+
+  return (
+    <div className="space-y-2">
+      {paragraphs.map((para, pi) => {
+        const trimmed = para.trim();
+        if (!trimmed) return null;
+
+        // Check if the whole paragraph is a bullet list
+        const lines = trimmed.split('\n');
+        const isList = lines.every(l => /^\s*[\-\*\u2022]\s/.test(l) || !l.trim());
+
+        if (isList) {
+          return (
+            <ul key={pi} className="space-y-1 ml-1">
+              {lines.filter(l => l.trim()).map((line, li) => (
+                <li key={li} className="flex gap-2 items-start">
+                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: QB.green }} />
+                  <span>{renderInline(line.replace(/^\s*[\-\*\u2022]\s*/, ''))}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        // Check if it's a numbered list
+        const isNumbered = lines.every(l => /^\s*\d+[\.\)]\s/.test(l) || !l.trim());
+        if (isNumbered) {
+          return (
+            <ol key={pi} className="space-y-1 ml-1">
+              {lines.filter(l => l.trim()).map((line, li) => (
+                <li key={li} className="flex gap-2 items-start">
+                  <span className="font-semibold shrink-0" style={{ color: QB.green }}>{li + 1}.</span>
+                  <span>{renderInline(line.replace(/^\s*\d+[\.\)]\s*/, ''))}</span>
+                </li>
+              ))}
+            </ol>
+          );
+        }
+
+        // Regular paragraph — handle single newlines as line breaks
+        return (
+          <p key={pi}>
+            {lines.map((line, li) => (
+              <span key={li}>
+                {li > 0 && <br />}
+                {renderInline(line)}
+              </span>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Render inline markdown: **bold**, *italic*, `code`, $values */
+function renderInline(text) {
+  if (!text) return null;
+  // Split by markdown tokens, preserving delimiters
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\$[\d,.]+[kKmMbB]?)/g);
+  return parts.map((part, i) => {
+    if (/^\*\*(.+)\*\*$/.test(part)) {
+      return <strong key={i} style={{ color: QB.textPrimary }}>{part.slice(2, -2)}</strong>;
+    }
+    if (/^\*(.+)\*$/.test(part)) {
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    }
+    if (/^`(.+)`$/.test(part)) {
+      return <code key={i} className="px-1 py-0.5 rounded text-[11px]" style={{ backgroundColor: '#F0F1F3', color: QB.textPrimary }}>{part.slice(1, -1)}</code>;
+    }
+    if (/^\$[\d,.]+[kKmMbB]?$/.test(part)) {
+      return <span key={i} className="font-semibold" style={{ color: QB.green }}>{part}</span>;
+    }
+    return part;
+  });
+}
 
 // ── Block Renderers ──────────────────────────────────────
 
@@ -205,36 +286,32 @@ export function AIChatMessages({ msgs, typing, tools, onSetInput, suggestions, c
                 <Bot size={13} style={{ color: QB.green }} />
               </div>
               <div className="max-w-[80%] space-y-2">
-                <div className="px-4 py-3 rounded-lg bg-white border text-sm leading-relaxed" style={{ borderColor: QB.cardBorder, color: QB.textPrimary }}>{m.content}</div>
-                {m.entities && m.entities.length > 0 && (
+                <div className="px-4 py-3 rounded-lg bg-white border text-sm leading-relaxed" style={{ borderColor: QB.cardBorder, color: QB.textSecondary }}>
+                  <FormattedText text={m.content} />
+                </div>
+                {m.entities && m.entities.length > 0 && m.entities.some(item => typeof item === 'object' && item !== null && item.name) && (
                   <div className="space-y-1.5">
-                    {m.entities.map((eid) => {
-                      const e = ENTITIES.find((x) => x.id === eid);
-                      if (e) {
-                        // Known mock entity — render rich card
-                        const ind = getIndustry(e.industry);
-                        const dr = RELATIONSHIPS.find((r) => (r.source === 'e1' && r.target === e.id) || (r.target === 'e1' && r.source === e.id));
-                        return (
-                          <div key={eid} className="flex items-center gap-3 p-3 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
-                            <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}>
-                              <Building2 size={14} style={{ color: ind.color }} />
+                    {m.entities.map((item, idx) => {
+                      const e = typeof item === 'object' && item !== null ? item : null;
+                      if (!e || !e.name) return null;
+                      const eid = e.id || idx;
+                      const ind = e.industry ? getIndustry(e.industry) : { label: '', color: QB.green };
+                      return (
+                        <div key={eid} className="flex items-center gap-3 p-3 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
+                          <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}>
+                            <Building2 size={14} style={{ color: ind.color }} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium" style={{ color: QB.link }}>{e.name}</div>
+                            <div className="text-[11px]" style={{ color: QB.textMuted }}>
+                              {ind.label}{e.city ? ` \u00B7 ${e.city}, ${e.state}` : ''}{e.volume ? ` \u00B7 ${fmt(e.volume)}/yr` : ''}
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium" style={{ color: QB.link }}>{e.name}</div>
-                              <div className="text-[11px]" style={{ color: QB.textMuted }}>{ind.label} &middot; {e.city}, {e.state} &middot; {fmt(e.volume)}/yr</div>
-                            </div>
-                            {dr && <RelTypeBadge type={getRelType(dr, 'e1')} />}
+                          </div>
+                          {e.confidence != null && (
                             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: e.confidence >= 0.9 ? QB.greenLight : QB.orangeLight, color: e.confidence >= 0.9 ? QB.greenDark : QB.orange }}>
                               {Math.round(e.confidence * 100)}%
                             </span>
-                          </div>
-                        );
-                      }
-                      // Real golden record ID — render compact badge
-                      return (
-                        <div key={eid} className="inline-flex items-center gap-2 px-3 py-1.5 mr-1.5 mb-1 rounded-lg bg-white border text-xs cursor-pointer hover:shadow-sm transition-shadow" style={{ borderColor: QB.cardBorder }}>
-                          <Building2 size={12} style={{ color: QB.green }} />
-                          <span className="font-mono text-[11px]" style={{ color: QB.link }}>{eid}</span>
+                          )}
                         </div>
                       );
                     })}
@@ -246,7 +323,9 @@ export function AIChatMessages({ msgs, typing, tools, onSetInput, suggestions, c
                 {m.signals && <SignalsBlock signals={m.signals} />}
                 {m.actions && <ActionsBlock actions={m.actions} onAction={onAction} />}
                 {m.followup && (
-                  <div className="px-4 py-3 rounded-lg bg-white border text-sm leading-relaxed whitespace-pre-line" style={{ borderColor: QB.cardBorder, color: QB.textSecondary }}>{m.followup}</div>
+                  <div className="px-4 py-3 rounded-lg border text-sm leading-relaxed" style={{ borderColor: QB.green + '40', backgroundColor: QB.greenLight, color: QB.textSecondary }}>
+                    <FormattedText text={m.followup} />
+                  </div>
                 )}
               </div>
             </div>

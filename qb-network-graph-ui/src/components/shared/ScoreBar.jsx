@@ -1,7 +1,7 @@
 import { QB } from '@/constants/colors';
 
 export function ScoreBar({ label, score }) {
-  const color = score >= 0.85 ? QB.green : score >= 0.65 ? QB.orange : QB.red;
+  const color = score >= 0.85 ? QB.green : score >= 0.60 ? QB.orange : QB.red;
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="w-20 shrink-0" style={{ color: QB.textMuted }}>{label}</span>

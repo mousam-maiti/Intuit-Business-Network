@@ -31,10 +31,11 @@ async def search_entities(
     limit: int = 10,
     ctx: Context = None,
 ) -> dict:
-    """Search golden records using semantic/hybrid vector search with optional filters.
+    """Search golden records using hybrid search: MySQL name match + Milvus vector search.
 
-    Performs a vector similarity search over all golden records using the query text,
-    then applies optional post-filters on NAICS code, state, city, and confidence.
+    Performs a 3-tier MySQL name lookup (exact → LIKE → FULLTEXT) first to catch
+    precise name matches, then augments with Milvus vector similarity results.
+    This ensures exact matches like "ALL PRO HVAC" are never missed.
 
     Args:
         query: Natural language search query (e.g., "plumbing contractors in Texas").
@@ -49,51 +50,79 @@ async def search_entities(
     """
     app: AppContext = ctx.request_context.lifespan_context
 
-    # Vector search via Milvus
-    raw_results = app.milvus.search_by_text(
-        query_text=query,
-        state_filter=state_filter,
-        naics_filter=naics_filter,
-        top_k=limit * 3,  # over-fetch for post-filtering
-    )
-
-    # Enrich from MySQL and apply post-filters
     results = []
-    for hit in raw_results:
+    seen_ids = set()
+
+    # ── Phase 1: MySQL name search (exact → LIKE → FULLTEXT) ──
+    mysql_hits = app.mysql.search_by_name(
+        query=query,
+        state_filter=state_filter,
+        city_filter=city_filter,
+        naics_filter=naics_filter,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+    for hit in mysql_hits:
         gr_id = hit.get("golden_record_id", "")
-        if not gr_id:
-            continue
+        if gr_id and gr_id not in seen_ids:
+            seen_ids.add(gr_id)
+            results.append({
+                "golden_record_id": gr_id,
+                "canonical_name": hit.get("canonical_name", ""),
+                "state": hit.get("state", ""),
+                "city": hit.get("city", ""),
+                "naics_code": hit.get("naics_code", ""),
+                "naics_sector": hit.get("naics_sector", ""),
+                "confidence": float(hit.get("confidence", 0)),
+                "entity_type": hit.get("entity_type", ""),
+                "source_count": int(hit.get("source_count", 1)),
+                "similarity": float(hit.get("match_rank", 0.9)),
+            })
 
-        gr_data = app.mysql.get_golden_record(gr_id)
-        if not gr_data:
-            continue
+    # ── Phase 2: Milvus vector search (fills remaining slots) ──
+    if len(results) < limit:
+        try:
+            raw_results = app.milvus.search_by_text(
+                query_text=query,
+                state_filter=state_filter,
+                naics_filter=naics_filter,
+                top_k=limit * 3,
+            )
+            for hit in raw_results:
+                if len(results) >= limit:
+                    break
+                gr_id = hit.get("golden_record_id", "")
+                if not gr_id or gr_id in seen_ids:
+                    continue
+                seen_ids.add(gr_id)
 
-        # Post-filters
-        if city_filter:
-            gr_city = (gr_data.get("city") or "").upper()
-            if gr_city != city_filter.upper():
-                continue
+                gr_data = app.mysql.get_golden_record(gr_id)
+                if not gr_data:
+                    continue
 
-        if min_confidence is not None:
-            gr_conf = float(gr_data.get("confidence", 0))
-            if gr_conf < min_confidence:
-                continue
+                if city_filter:
+                    gr_city = (gr_data.get("city") or "").upper()
+                    if gr_city != city_filter.upper():
+                        continue
+                if min_confidence is not None:
+                    gr_conf = float(gr_data.get("confidence", 0))
+                    if gr_conf < min_confidence:
+                        continue
 
-        results.append({
-            "golden_record_id": gr_id,
-            "canonical_name": gr_data.get("canonical_name", ""),
-            "state": gr_data.get("state", ""),
-            "city": gr_data.get("city", ""),
-            "naics_code": gr_data.get("naics_code", ""),
-            "naics_sector": gr_data.get("naics_sector", ""),
-            "confidence": float(gr_data.get("confidence", 0)),
-            "entity_type": gr_data.get("entity_type", ""),
-            "source_count": int(gr_data.get("source_count", 1)),
-            "similarity": hit.get("similarity"),
-        })
-
-        if len(results) >= limit:
-            break
+                results.append({
+                    "golden_record_id": gr_id,
+                    "canonical_name": gr_data.get("canonical_name", ""),
+                    "state": gr_data.get("state", ""),
+                    "city": gr_data.get("city", ""),
+                    "naics_code": gr_data.get("naics_code", ""),
+                    "naics_sector": gr_data.get("naics_sector", ""),
+                    "confidence": float(gr_data.get("confidence", 0)),
+                    "entity_type": gr_data.get("entity_type", ""),
+                    "source_count": int(gr_data.get("source_count", 1)),
+                    "similarity": hit.get("similarity"),
+                })
+        except Exception as e:
+            logger.warning(f"Milvus search failed, using MySQL results only: {e}")
 
     return {
         "results": results,
@@ -362,69 +391,169 @@ async def aggregate_stats(
 async def search_by_relationship(
     entity_id: str,
     relationship_type: str = "transactsWith",
+    company_id: str = None,
     ctx: Context = None,
 ) -> dict:
     """Find entities connected to a given entity via a specific KG predicate.
 
     Queries the knowledge graph for entities related to the given entity
-    through the specified relationship type.
+    through the specified relationship type. If company_id is provided and
+    GraphDB is unavailable, falls back to querying the MySQL relationships table.
 
     Args:
         entity_id: Golden record ID to search from.
         relationship_type: KG predicate to follow (default 'transactsWith').
             Supported: transactsWith, operatesIn, locatedIn, provides.
+        company_id: Optional company ID to query MySQL relationships as fallback.
 
     Returns:
         Dict with 'related_entities' list and 'relationship_type'.
     """
     app: AppContext = ctx.request_context.lifespan_context
 
-    if not app.graphdb.available:
-        return {"related_entities": [], "relationship_type": relationship_type,
-                "error": "GraphDB unavailable"}
+    # Try GraphDB first
+    if app.graphdb.available:
+        allowed = {"transactsWith", "operatesIn", "locatedIn", "provides"}
+        if relationship_type not in allowed:
+            return {"error": f"Unsupported relationship_type: {relationship_type}. "
+                             f"Allowed: {sorted(allowed)}"}
 
-    allowed = {"transactsWith", "operatesIn", "locatedIn", "provides"}
-    if relationship_type not in allowed:
-        return {"error": f"Unsupported relationship_type: {relationship_type}. "
-                         f"Allowed: {sorted(allowed)}"}
+        sparql = f"""
+        PREFIX entity: <http://qb.intuit.com/entity/>
+        PREFIX qb: <http://qb.intuit.com/ontology/>
 
-    sparql = f"""
-    PREFIX entity: <http://qb.intuit.com/entity/>
-    PREFIX qb: <http://qb.intuit.com/ontology/>
+        SELECT ?related ?name WHERE {{
+            entity:{entity_id} qb:{relationship_type} ?related .
+            OPTIONAL {{ ?related qb:canonicalName ?name }}
+        }}
+        """
+        rows = app.graphdb.query(sparql)
 
-    SELECT ?related ?name WHERE {{
-        entity:{entity_id} qb:{relationship_type} ?related .
-        OPTIONAL {{ ?related qb:canonicalName ?name }}
-    }}
-    """
-    rows = app.graphdb.query(sparql)
+        related = []
+        for r in rows:
+            rel_id = r.get("related", "").split("/")[-1]
+            if not rel_id:
+                continue
 
+            entry = {
+                "entity_id": rel_id,
+                "name": r.get("name", ""),
+            }
+
+            # Enrich from MySQL
+            gr_data = app.mysql.get_golden_record(rel_id)
+            if gr_data:
+                entry["canonical_name"] = gr_data.get("canonical_name", "")
+                entry["state"] = gr_data.get("state", "")
+                entry["naics_code"] = gr_data.get("naics_code", "")
+                entry["confidence"] = float(gr_data.get("confidence", 0))
+
+            related.append(entry)
+
+        if related:
+            return {
+                "related_entities": related,
+                "count": len(related),
+                "source_entity": entity_id,
+                "relationship_type": relationship_type,
+                "source": "graphdb",
+            }
+
+    # Fallback: MySQL relationships table (company_id → golden records)
+    lookup_id = company_id or entity_id
+    rows = app.mysql.get_relationships(lookup_id)
     related = []
     for r in rows:
-        rel_id = r.get("related", "").split("/")[-1]
-        if not rel_id:
-            continue
-
-        entry = {
-            "entity_id": rel_id,
-            "name": r.get("name", ""),
-        }
-
-        # Enrich from MySQL
-        gr_data = app.mysql.get_golden_record(rel_id)
-        if gr_data:
-            entry["canonical_name"] = gr_data.get("canonical_name", "")
-            entry["state"] = gr_data.get("state", "")
-            entry["naics_code"] = gr_data.get("naics_code", "")
-            entry["confidence"] = float(gr_data.get("confidence", 0))
-
-        related.append(entry)
+        related.append({
+            "entity_id": r.get("target_entity_id", ""),
+            "canonical_name": r.get("canonical_name", ""),
+            "state": r.get("state", ""),
+            "city": r.get("city", ""),
+            "naics_code": r.get("naics_code", ""),
+            "confidence": float(r.get("confidence", 0)),
+            "transaction_volume": r.get("transaction_volume"),
+            "transaction_count": r.get("transaction_count"),
+        })
 
     return {
         "related_entities": related,
         "count": len(related),
-        "source_entity": entity_id,
+        "source_entity": lookup_id,
         "relationship_type": relationship_type,
+        "source": "mysql_relationships",
+    }
+
+
+# ── Tool 19: get_company_connections ─────────────────────────
+
+@mcp.tool()
+async def get_company_connections(
+    company_id: str,
+    connection_type: str = "all",
+    sort_by: str = "volume",
+    limit: int = 20,
+    ctx: Context = None,
+) -> dict:
+    """Get vendors/customers for a specific company from the relationships table.
+
+    Queries the MySQL relationships table where the company is the source entity,
+    returning enriched golden record data for each connected entity.
+
+    Args:
+        company_id: The company's ID (e.g., "1" for Acme Corp).
+        connection_type: Filter by type — 'vendor', 'customer', or 'all' (default 'all').
+        sort_by: Sort results by 'volume', 'count', or 'name' (default 'volume').
+        limit: Maximum results to return (default 20).
+
+    Returns:
+        Dict with 'connections' list, 'total' count, and summary stats.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    rows = app.mysql.get_relationships(
+        company_id=company_id,
+        connection_type=connection_type,
+        sort_by=sort_by,
+        limit=limit,
+    )
+
+    connections = []
+    total_volume = 0.0
+    total_txns = 0
+    for r in rows:
+        vol = float(r.get("transaction_volume") or 0)
+        txn = int(r.get("transaction_count") or 0)
+        total_volume += vol
+        total_txns += txn
+
+        conn_type = r.get("connection_type", "vendor")
+        # For vendors, the other entity is target; for customers, it's source
+        other_id = r.get("target_entity_id", "") if conn_type == "vendor" else r.get("source_entity_id", "")
+        connections.append({
+            "golden_record_id": other_id,
+            "canonical_name": r.get("canonical_name", ""),
+            "state": r.get("state", ""),
+            "city": r.get("city", ""),
+            "naics_code": r.get("naics_code", ""),
+            "confidence": float(r.get("confidence", 0)),
+            "entity_type": r.get("entity_type", ""),
+            "source_count": int(r.get("source_count", 1)),
+            "transaction_volume": vol,
+            "transaction_count": txn,
+            "connection_type": conn_type,
+        })
+
+    return {
+        "connections": connections,
+        "total": len(connections),
+        "company_id": company_id,
+        "connection_type": connection_type,
+        "sort_by": sort_by,
+        "summary": {
+            "total_volume": round(total_volume, 2),
+            "total_transactions": total_txns,
+            "avg_volume_per_connection": round(total_volume / len(connections), 2) if connections else 0,
+        },
     }
 
 

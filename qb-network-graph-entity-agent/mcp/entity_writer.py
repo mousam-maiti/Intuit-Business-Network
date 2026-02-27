@@ -63,6 +63,8 @@ class EntityWriter:
         orphan_persona: ClassifiedPersona,
         golden_record_id: str,
         merge_reasoning: dict,
+        company_id: str = None,
+        record_type: str = "vendor",
     ) -> dict:
         """Merge orphan into existing golden record."""
         start = time.time()
@@ -86,6 +88,17 @@ class EntityWriter:
 
         # 1. MySQL
         self._mysql.write_golden_record(gr)
+
+        # 1b. Relationship edge (company → golden record)
+        if company_id is not None:
+            edge_id = self._mysql.generate_id("E")
+            self._mysql.write_relationship(
+                edge_id=edge_id,
+                source_id=str(company_id),
+                target_id=gr.golden_record_id,
+                volume=_get_volume(orphan_persona),
+                count=_get_txn_count(orphan_persona),
+            )
 
         # 2. Milvus
         milvus_result = {}
@@ -116,6 +129,8 @@ class EntityWriter:
         orphan_record_id: str,
         orphan_persona: ClassifiedPersona,
         creation_reasoning: dict,
+        company_id: str = None,
+        record_type: str = "vendor",
     ) -> dict:
         """Create a new golden record from unmatched orphan."""
         start = time.time()
@@ -137,6 +152,17 @@ class EntityWriter:
         )
 
         self._mysql.write_golden_record(gr)
+
+        # Relationship edge (company → golden record)
+        if company_id is not None:
+            edge_id = self._mysql.generate_id("E")
+            self._mysql.write_relationship(
+                edge_id=edge_id,
+                source_id=str(company_id),
+                target_id=gr.golden_record_id,
+                volume=_get_volume(orphan_persona),
+                count=_get_txn_count(orphan_persona),
+            )
 
         milvus_result = {}
         if self._milvus:
@@ -165,6 +191,8 @@ class EntityWriter:
         orphan_persona: ClassifiedPersona,
         candidate_golden_record_id: str,
         review_reasoning: dict,
+        company_id: str = None,
+        record_type: str = "vendor",
     ) -> dict:
         """Submit ambiguous match to human review queue."""
         start = time.time()
@@ -199,6 +227,17 @@ class EntityWriter:
         # Single transaction: insert provisional GR + pending resolution together
         # to avoid FK violation on separate connections
         self._mysql.write_golden_record_and_pending(prov_gr, pending)
+
+        # Relationship edge (company → provisional golden record)
+        if company_id is not None:
+            edge_id = self._mysql.generate_id("E")
+            self._mysql.write_relationship(
+                edge_id=edge_id,
+                source_id=str(company_id),
+                target_id=prov_id,
+                volume=_get_volume(orphan_persona),
+                count=_get_txn_count(orphan_persona),
+            )
 
         milvus_result = {}
         if self._milvus:
@@ -343,6 +382,19 @@ class EntityWriter:
 
 
 # ── Helpers ─────────────────────────────────────────────────
+
+def _get_volume(persona: ClassifiedPersona):
+    """Estimate total volume from persona behavioral data."""
+    b = persona.behavioral
+    if b.avg_transaction and b.transaction_count:
+        return round(b.avg_transaction * b.transaction_count, 2)
+    return None
+
+
+def _get_txn_count(persona: ClassifiedPersona):
+    """Extract transaction count from persona."""
+    return persona.behavioral.transaction_count
+
 
 def _apply_survivorship(gr: GoldenRecord, orphan: ClassifiedPersona):
     gi, oi = gr.persona.identity, orphan.identity

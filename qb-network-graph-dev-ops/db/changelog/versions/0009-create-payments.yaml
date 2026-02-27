@@ -1,0 +1,107 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0009-create-payments
+      author: qb-network-graph
+      comment: >
+        Payments against invoices and bills. Confirms money actually moved.
+        Polymorphic: references either an invoice or a bill.
+      changes:
+        - createTable:
+            tableName: payments
+            columns:
+              - column:
+                  name: payment_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: invoice_id
+                  type: BIGINT UNSIGNED
+                  remarks: "NULL if this is a bill payment"
+              - column:
+                  name: bill_id
+                  type: BIGINT UNSIGNED
+                  remarks: "NULL if this is an invoice payment"
+              - column:
+                  name: payment_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: amount
+                  type: DECIMAL(14, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: payment_method
+                  type: VARCHAR(50)
+                  remarks: "check, ach, credit_card, wire, cash"
+              - column:
+                  name: reference_number
+                  type: VARCHAR(100)
+              - column:
+                  name: memo
+                  type: TEXT
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: payments
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_payments_company
+        - addForeignKeyConstraint:
+            baseTableName: payments
+            baseColumnNames: invoice_id
+            referencedTableName: invoices
+            referencedColumnNames: invoice_id
+            constraintName: fk_payments_invoice
+        - addForeignKeyConstraint:
+            baseTableName: payments
+            baseColumnNames: bill_id
+            referencedTableName: bills
+            referencedColumnNames: bill_id
+            constraintName: fk_payments_bill
+
+        - createIndex:
+            tableName: payments
+            indexName: idx_payments_company
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: payments
+            indexName: idx_payments_date
+            columns:
+              - column:
+                  name: payment_date
+        - createIndex:
+            tableName: payments
+            indexName: idx_payments_invoice
+            columns:
+              - column:
+                  name: invoice_id
+        - createIndex:
+            tableName: payments
+            indexName: idx_payments_bill
+            columns:
+              - column:
+                  name: bill_id
+
+      rollback:
+        - dropTable:
+            tableName: payments

@@ -1,17 +1,39 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Check, XCircle, GitBranch } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
-import { PENDING_MATCHES } from '@/api/mock/data';
+import { getPendingMatches, resolveMatch } from '@/api/matching';
 import { Widget, ScoreBar } from '@/components/shared';
 
+const TRIGGER_LABELS = {
+  AI_AGENT_DETERMINISTIC: 'Deterministic Match',
+  AI_AGENT_EMBEDDING: 'Embedding Match',
+  AI_AGENT_LLM: 'LLM Review',
+  AI_AGENT: 'AI Review',
+};
+
 export default function ReviewPage() {
-  const [matches, setMatches] = useState(PENDING_MATCHES);
+  const [matches, setMatches] = useState([]);
   const [resolved, setResolved] = useState([]);
-  const act = (id, action) => {
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    getPendingMatches().then(r => setMatches(r.data));
+  }, []);
+  const act = async (id, action) => {
     const m = matches.find((x) => x.id === id);
+    const prevMatches = matches;
+    const prevResolved = resolved;
     setMatches((p) => p.filter((x) => x.id !== id));
     setResolved((p) => [{ ...m, action, at: 'Just now' }, ...p]);
+    setError(null);
+    try {
+      await resolveMatch(id, action === 'merged' ? 'accept' : 'reject');
+    } catch (e) {
+      setMatches(prevMatches);
+      setResolved(prevResolved);
+      setError(`Failed to ${action === 'merged' ? 'merge' : 'reject'}: ${e.message || 'Unknown error'}`);
+    }
   };
 
   return (
@@ -21,6 +43,12 @@ export default function ReviewPage() {
           Match review <span className="text-sm font-normal" style={{ color: QB.textMuted }}>&middot; {matches.length} pending</span>
         </h1>
       </div>
+      {error && (
+        <div className="mx-6 mb-2 px-4 py-2 rounded text-xs font-medium flex items-center justify-between" style={{ backgroundColor: '#FEE2E2', color: '#DC2626' }}>
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-4 text-xs underline">Dismiss</button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-3">
         {matches.length === 0 && (
           <Widget>
@@ -34,12 +62,12 @@ export default function ReviewPage() {
           <Widget key={m.id}>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold px-2 py-0.5 rounded" style={{ backgroundColor: m.confidence >= 0.75 ? QB.orangeLight : '#FEE2E2', color: m.confidence >= 0.75 ? QB.orange : '#DC2626' }}>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded" style={{ backgroundColor: m.confidence >= 0.85 ? '#DCFCE7' : m.confidence >= 0.60 ? QB.orangeLight : '#FEE2E2', color: m.confidence >= 0.85 ? '#16A34A' : m.confidence >= 0.60 ? QB.orange : '#DC2626' }}>
                   {Math.round(m.confidence * 100)}% match
                 </span>
                 <span className="text-xs" style={{ color: QB.textMuted }}>{m.age}</span>
               </div>
-              <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: '#F4F5F7', color: QB.textMuted }}>Tier 2 &mdash; AI Persona Match</span>
+              <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: '#F4F5F7', color: QB.textMuted }}>{TRIGGER_LABELS[m.triggerType] || TRIGGER_LABELS.AI_AGENT}</span>
             </div>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div className="p-3 rounded" style={{ backgroundColor: '#F4F5F7' }}>
@@ -59,6 +87,7 @@ export default function ReviewPage() {
                 <ScoreBar label="Industry" score={m.scores.industry} />
                 <ScoreBar label="Location" score={m.scores.location} />
                 <ScoreBar label="Commodity" score={m.scores.commodity} />
+                <ScoreBar label="Behavioral" score={m.scores.behavioral ?? 0} />
               </div>
               <div>
                 <div className="text-[10px] font-semibold tracking-wider mb-1.5" style={{ color: QB.textMuted, letterSpacing: '0.08em' }}>SHARED NEIGHBORS ({m.sharedNeighbors.length})</div>

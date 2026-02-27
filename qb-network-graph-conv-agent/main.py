@@ -28,7 +28,7 @@ from chat.session import SessionManager
 from chat.context import ContextWindow
 from chat.agent import ConversationalAgent
 from chat.models import (
-    WSClientMessage, WSSessionInfo, WSToolCall, WSResponse,
+    WSClientMessage, WSSessionInfo, WSToolCall, WSThought, WSResponse,
     WSError, WSContextCleared,
 )
 
@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
         mcp=mcp,
         llm_model=_cfg.llm.model,
         temperature=_cfg.llm.temperature,
-        max_tool_calls=_cfg.context.max_tool_calls,
+        max_iterations=_cfg.context.max_iterations,
     )
 
     logger.info("=" * 60)
@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  MCP Tools:  {len(mcp._tool_names)} available")
     logger.info(f"  MySQL:      {'connected' if _db.connected else 'in-memory fallback'}")
     logger.info(f"  LLM:        {_cfg.llm.model}")
-    logger.info(f"  Context:    max={_cfg.context.max_messages} keep={_cfg.context.keep_recent}")
+    logger.info(f"  Context:    max={_cfg.context.max_messages} keep={_cfg.context.keep_recent} max_iter={_cfg.context.max_iterations}")
     logger.info("=" * 60)
 
     yield
@@ -201,9 +201,9 @@ async def websocket_chat(ws: WebSocket, session_id: str, user_id: str = Query(de
                     # Assemble context
                     history = _context_win.assemble_context(session, content)
 
-                    # Progress callback to stream tool events
-                    async def on_tool_progress(tool_call: WSToolCall):
-                        await ws.send_json(tool_call.model_dump())
+                    # Progress callback to stream tool + thought events
+                    async def on_progress(event: WSToolCall | WSThought):
+                        await ws.send_json(event.model_dump())
 
                     # Process through agent
                     response = await _agent.handle_message(
@@ -211,7 +211,7 @@ async def websocket_chat(ws: WebSocket, session_id: str, user_id: str = Query(de
                         user_message=content,
                         ui_context=ui_context,
                         history=history,
-                        progress_callback=on_tool_progress,
+                        progress_callback=on_progress,
                     )
 
                     # Save assistant response

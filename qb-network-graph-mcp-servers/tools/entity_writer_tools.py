@@ -70,6 +70,45 @@ def _resolve_canonical_name(persona: ClassifiedPersona) -> str:
     return name
 
 
+def _get_volume(persona: ClassifiedPersona):
+    """Estimate total volume from persona behavioral data."""
+    b = persona.behavioral
+    if b.avg_transaction and b.transaction_count:
+        return round(b.avg_transaction * b.transaction_count, 2)
+    return None
+
+
+def _get_txn_count(persona: ClassifiedPersona):
+    """Extract transaction count from persona."""
+    return persona.behavioral.transaction_count
+
+
+def _ensure_company_golden_record(app: "AppContext", company_id: str):
+    """Create a QB_USER golden record for a company if it doesn't already exist.
+
+    Required for customer relationships where company_id is the FK target.
+    """
+    cid = str(company_id)
+    existing = app.mysql.get_golden_record(cid)
+    if existing:
+        return
+    company = app.mysql.get_company(cid)
+    name = company["company_name"] if company else f"Company {cid}"
+    gr = GoldenRecord(
+        golden_record_id=cid,
+        canonical_name=name,
+        name_variants=[name],
+        persona=ClassifiedPersona(),
+        source_count=1,
+        confidence=1.0,
+        status="ACTIVE",
+        entity_type="QB_USER",
+        source_records=[],
+        bucket_keys=[],
+    )
+    app.mysql.write_golden_record(gr)
+
+
 def _gr_to_kg_attrs(gr: GoldenRecord, orphan: ClassifiedPersona) -> dict:
     name = gr.canonical_name
     if not name:
@@ -99,6 +138,8 @@ async def merge_into_golden_record(
     orphan_persona: dict,
     golden_record_id: str,
     merge_reasoning: dict,
+    company_id: str = None,
+    record_type: str = "vendor",
     ctx: Context = None,
 ) -> dict:
     """Merge an orphan record into an existing golden record.
@@ -111,6 +152,8 @@ async def merge_into_golden_record(
         orphan_persona: Classified persona dict of the orphan.
         golden_record_id: Target golden record to merge into.
         merge_reasoning: Dict with reasoning, confidence, dimension_scores.
+        company_id: Optional company ID to create a relationship edge.
+        record_type: Type of record — 'vendor' or 'customer' (default 'vendor').
 
     Returns:
         Dict with 'success', 'golden_record_id', before/after snapshots, sync_status.
@@ -138,6 +181,22 @@ async def merge_into_golden_record(
 
     app.mysql.write_golden_record(gr)
 
+    # Relationship edge: vendor = company→entity, customer = entity→company
+    if company_id is not None:
+        if record_type == "customer":
+            _ensure_company_golden_record(app, company_id)
+            src, tgt = gr.golden_record_id, str(company_id)
+        else:
+            src, tgt = str(company_id), gr.golden_record_id
+        edge_id = app.mysql.generate_id("E")
+        app.mysql.write_relationship(
+            edge_id=edge_id,
+            source_id=src,
+            target_id=tgt,
+            volume=_get_volume(persona),
+            count=_get_txn_count(persona),
+        )
+
     milvus_result = app.milvus.upsert_golden_record(gr.model_dump())
 
     kg_result = {}
@@ -164,6 +223,8 @@ async def create_golden_record(
     orphan_record_id: str,
     orphan_persona: dict,
     creation_reasoning: dict,
+    company_id: str = None,
+    record_type: str = "vendor",
     ctx: Context = None,
 ) -> dict:
     """Create a new golden record from an unmatched orphan.
@@ -175,6 +236,8 @@ async def create_golden_record(
         orphan_record_id: Record ID of the orphan.
         orphan_persona: Classified persona dict of the orphan.
         creation_reasoning: Dict with reasoning for why this is a new entity.
+        company_id: Optional company ID to create a relationship edge.
+        record_type: Type of record — 'vendor' or 'customer' (default 'vendor').
 
     Returns:
         Dict with 'success', 'golden_record_id', 'bucket_keys', sync_status.
@@ -200,6 +263,22 @@ async def create_golden_record(
     )
 
     app.mysql.write_golden_record(gr)
+
+    # Relationship edge: vendor = company→entity, customer = entity→company
+    if company_id is not None:
+        if record_type == "customer":
+            _ensure_company_golden_record(app, company_id)
+            src, tgt = gr_id, str(company_id)
+        else:
+            src, tgt = str(company_id), gr_id
+        edge_id = app.mysql.generate_id("E")
+        app.mysql.write_relationship(
+            edge_id=edge_id,
+            source_id=src,
+            target_id=tgt,
+            volume=_get_volume(persona),
+            count=_get_txn_count(persona),
+        )
 
     milvus_result = app.milvus.upsert_golden_record(gr.model_dump())
 
@@ -227,6 +306,8 @@ async def submit_for_review(
     orphan_persona: dict,
     candidate_golden_record_id: str,
     review_reasoning: dict,
+    company_id: str = None,
+    record_type: str = "vendor",
     ctx: Context = None,
 ) -> dict:
     """Submit an ambiguous match to the human review queue.
@@ -239,6 +320,8 @@ async def submit_for_review(
         orphan_persona: Classified persona dict of the orphan.
         candidate_golden_record_id: Best candidate golden record ID.
         review_reasoning: Dict with confidence, dimension_scores, reasoning, key_uncertainty.
+        company_id: Optional company ID to create a relationship edge.
+        record_type: Type of record — 'vendor' or 'customer' (default 'vendor').
 
     Returns:
         Dict with 'success', 'provisional_golden_record_id', 'pending_match_id', sync_status.
@@ -271,9 +354,26 @@ async def submit_for_review(
         dimension_scores=review_reasoning.get("dimension_scores", {}),
         reasoning=review_reasoning.get("reasoning", ""),
         key_uncertainty=review_reasoning.get("key_uncertainty", ""),
+        trigger_type=review_reasoning.get("trigger_type", "AI_AGENT"),
     )
 
     app.mysql.write_golden_record_and_pending(prov_gr, pending)
+
+    # Relationship edge: vendor = company→entity, customer = entity→company
+    if company_id is not None:
+        if record_type == "customer":
+            _ensure_company_golden_record(app, company_id)
+            src, tgt = prov_id, str(company_id)
+        else:
+            src, tgt = str(company_id), prov_id
+        edge_id = app.mysql.generate_id("E")
+        app.mysql.write_relationship(
+            edge_id=edge_id,
+            source_id=src,
+            target_id=tgt,
+            volume=_get_volume(persona),
+            count=_get_txn_count(persona),
+        )
 
     milvus_result = app.milvus.upsert_golden_record(prov_gr.model_dump())
 
@@ -355,6 +455,8 @@ async def merge_golden_records(
         embedding_calls=merge_reasoning.get("embedding_calls", 0),
         total_duration_ms=0,
         evaluation_chain=[],
+        golden_record_before=surv_before,
+        golden_record_after=survivor.model_dump(),
     )
 
     success = app.mysql.transactional_merge(

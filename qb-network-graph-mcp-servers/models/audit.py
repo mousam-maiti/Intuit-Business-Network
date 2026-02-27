@@ -41,6 +41,7 @@ class PendingResolution(BaseModel):
     dimension_scores: dict = Field(default_factory=dict)
     reasoning: str = ""
     key_uncertainty: str = ""
+    trigger_type: str = "AI_AGENT"
     status: str = "PENDING"             # PENDING | MERGED | REJECTED
     decided_by: Optional[str] = None
     decided_at: Optional[str] = None

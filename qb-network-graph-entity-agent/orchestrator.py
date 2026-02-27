@@ -417,6 +417,8 @@ class Orchestrator:
                 "confidence": candidate.combined_score,
                 "dimension_scores": _extract_dim_scores(candidate).__dict__,
             },
+            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
             step="merge", tool_called="mcp:merge_into_golden_record",
@@ -476,6 +478,8 @@ class Orchestrator:
             "orphan_record_id": request.record_id,
             "orphan_persona": persona.model_dump() if hasattr(persona, "model_dump") else persona,
             "creation_reasoning": {"trigger": "AI_AGENT_NEW", "reasoning": reason},
+            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
             step="create", tool_called="mcp:create_golden_record",
@@ -535,7 +539,10 @@ class Orchestrator:
                 "dimension_scores": _extract_dim_scores(candidate).__dict__,
                 "reasoning": reason,
                 "key_uncertainty": key_uncertainty,
+                "trigger_type": "AI_AGENT_LLM" if llm_calls > 0 else "AI_AGENT_EMBEDDING",
             },
+            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
             step="submit_review", tool_called="mcp:submit_for_review",

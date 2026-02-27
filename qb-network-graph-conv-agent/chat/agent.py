@@ -1,41 +1,86 @@
 """
-ConversationalAgent — Gemini function calling + MCP tools.
+ConversationalAgent — ReAct (Reasoning + Acting) loop with MCP tools.
 
 Core flow:
-1. User message + conversation history → Gemini
-2. Gemini returns function_call → execute MCP tool → stream progress → feed result back
-3. Repeat until Gemini returns a text response
+1. User message + conversation history → Gemini (text generation, no function calling)
+2. Gemini returns Thought + Action → parse tool call → execute MCP tool → stream progress
+3. Feed Observation back → repeat until Gemini returns Answer
 4. Parse JSON response → merge with formatter blocks → send to client
 """
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Awaitable
+import re
+from typing import Any, Callable, Awaitable, Union
 
 import google.generativeai as genai
-from google.generativeai.types import content_types
+from json_repair import repair_json
 
 from clients.mcp_client import MCPToolClient, MCPError
-from chat.prompts import SYSTEM_PROMPT, TOOL_DECLARATIONS, TOOL_LABELS, TITLE_PROMPT
+from chat.prompts import REACT_SYSTEM_PROMPT, TOOL_NAMES, TOOL_LABELS, TITLE_PROMPT
 from chat.formatter import format_tool_result, merge_blocks
-from chat.models import WSResponse, WSToolCall
+from chat.models import WSResponse, WSToolCall, WSThought
 
 logger = logging.getLogger(__name__)
 
-# Type for the progress callback: async fn(WSToolCall) -> None
-ProgressCallback = Callable[[WSToolCall], Awaitable[None]]
+# Type for the progress callback: async fn(WSToolCall | WSThought) -> None
+ProgressCallback = Callable[[Union[WSToolCall, WSThought]], Awaitable[None]]
+
+# ── Regex patterns for parsing ReAct output ───────────────────
+RE_THOUGHT = re.compile(r"^Thought:\s*(.+?)(?=\n(?:Action:|Answer:)|$)", re.DOTALL | re.MULTILINE)
+RE_ACTION  = re.compile(r"^Action:\s*(\w+)\((.+)\)\s*$", re.MULTILINE)
+RE_ANSWER  = re.compile(r"^Answer:\s*(.+)$", re.DOTALL | re.MULTILINE)
+
+# Maximum chars for Observation text fed back to the model
+_MAX_OBSERVATION_LEN = 4000
+
+
+def _safe_text(response) -> str:
+    """Safely extract text from a Gemini response (avoids .text accessor crash on empty parts)."""
+    try:
+        candidate = response.candidates[0]
+        # Handle MALFORMED_FUNCTION_CALL — model tried native function calling
+        # instead of text-based ReAct. Extract function call info and convert to ReAct format.
+        finish = getattr(candidate, "finish_reason", None)
+        # finish_reason enum: 1=STOP, 2=MAX_TOKENS, 3=SAFETY, 4=RECITATION, 6=MALFORMED_FUNCTION_CALL
+        if finish and (str(finish) == "MALFORMED_FUNCTION_CALL" or getattr(finish, 'value', None) == 6
+                       or str(finish) == "6" or "MALFORMED" in str(finish).upper()):
+            # Try to recover function call parts as ReAct Action text
+            parts = candidate.content.parts if hasattr(candidate, "content") and candidate.content else []
+            for part in parts:
+                fc = getattr(part, "function_call", None)
+                if fc:
+                    name = getattr(fc, "name", "unknown")
+                    args = dict(fc.args) if hasattr(fc, "args") and fc.args else {}
+                    import json as _json
+                    return f"Thought: I need to look up this information.\nAction: {name}({_json.dumps(args)})"
+                if hasattr(part, "text") and part.text:
+                    return part.text
+            # Nothing recoverable — nudge model
+            return ""
+    except (IndexError, AttributeError):
+        pass
+
+    try:
+        return response.text or ""
+    except (ValueError, AttributeError):
+        try:
+            parts = response.candidates[0].content.parts
+            return parts[0].text if parts else ""
+        except (IndexError, AttributeError):
+            return ""
 
 
 class ConversationalAgent:
-    """Gemini-powered conversational agent with MCP tool integration."""
+    """ReAct-powered conversational agent with MCP tool integration."""
 
     def __init__(self, mcp: MCPToolClient, llm_model: str, temperature: float = 0.3,
-                 max_tool_calls: int = 5):
+                 max_iterations: int = 8):
         self.mcp = mcp
         self.llm_model = llm_model
         self.temperature = temperature
-        self.max_tool_calls = max_tool_calls
+        self.max_iterations = max_iterations
 
     async def handle_message(
         self,
@@ -45,65 +90,128 @@ class ConversationalAgent:
         history: list[dict],
         progress_callback: ProgressCallback | None = None,
     ) -> WSResponse:
-        """Process a user message through Gemini function calling loop.
+        """Process a user message through the ReAct loop.
 
         Args:
             session: Chat session dict
             user_message: The user's message text
             ui_context: Optional UI context (selectedEntity, currentPage)
             history: Assembled conversation history for Gemini
-            progress_callback: Async callback to stream tool_call events
+            progress_callback: Async callback to stream tool_call / thought events
 
         Returns:
             WSResponse with all UI blocks
         """
-        # Build Gemini tools
-        tools = self._build_tools()
-
         # Build system instruction with optional UI context
-        system = SYSTEM_PROMPT
+        system = REACT_SYSTEM_PROMPT
+        logger.info(f"ui_context received: {ui_context}")
         if ui_context:
             entity = ui_context.get("selectedEntity")
             page = ui_context.get("currentPage")
             if entity:
+                company_id = entity.get("id", "")
                 entity_name = entity.get("name", entity.get("id", ""))
-                system += f"\n\nCurrent UI context: The user is viewing entity '{entity_name}' (ID: {entity.get('id', '')}) on the {page or 'unknown'} page."
+                system += f"\n\nCurrent UI context: company_id='{company_id}', company_name='{entity_name}', page='{page or 'unknown'}'."
+                system += f"\nWhen the user asks about 'my vendors', 'my customers', or 'my network', use company_id='{company_id}' with the get_company_connections tool."
 
-        # Create model with tools
+        # Create model WITHOUT tools param (text generation only)
         model = genai.GenerativeModel(
             model_name=self.llm_model,
             system_instruction=system,
-            tools=tools,
             generation_config=genai.GenerationConfig(
                 temperature=self.temperature,
+                max_output_tokens=2048,
             ),
         )
 
         # Start chat with history
         chat = model.start_chat(history=history)
 
-        # Send user message and enter function calling loop
+        # ── ReAct loop ────────────────────────────────────────
         all_formatter_blocks: dict[str, Any] = {}
-        tool_call_count = 0
+        current_prompt = user_message
+        iteration = 0
 
-        response = chat.send_message(user_message)
+        for iteration in range(1, self.max_iterations + 1):
+            try:
+                response = chat.send_message(current_prompt)
+            except Exception as e:
+                err_str = str(e)
+                logger.warning(f"ReAct iter {iteration}: send_message error: {err_str}")
+                if "MALFORMED_FUNCTION_CALL" in err_str.upper() or "content {" in err_str:
+                    # Model tried native function calling — nudge it back to ReAct text format
+                    current_prompt = (
+                        "You must NOT use function calling. Instead, use the ReAct text format:\n"
+                        "Thought: <reasoning>\n"
+                        "Action: tool_name({\"arg\": \"value\"})\n\n"
+                        "Please try again with the correct format."
+                    )
+                    continue
+                raise
 
-        while tool_call_count < self.max_tool_calls:
-            # Check if response has function calls
-            part = response.candidates[0].content.parts[0]
+            text = _safe_text(response)
 
-            if not hasattr(part, "function_call") or not part.function_call.name:
-                # Text response — done with tool calls
+            if not text.strip():
+                logger.warning(f"ReAct iter {iteration}: empty response from model, nudging")
+                current_prompt = "Observation: (empty response) — please continue with a Thought and Action, or provide your final Answer."
+                continue
+
+            logger.info(f"ReAct iter {iteration} raw:\n{text[:800]}")
+
+            # Check for final Answer (use LAST match — model sometimes drafts multiple)
+            answer_matches = list(RE_ANSWER.finditer(text))
+            if answer_matches:
+                answer_match = answer_matches[-1]
+                # Stream any final thought before the answer
+                thought_match = RE_THOUGHT.search(text)
+                if thought_match and progress_callback:
+                    await progress_callback(WSThought(
+                        text=thought_match.group(1).strip(), step=iteration,
+                    ))
+
+                final_text = answer_match.group(1).strip()
+                gemini_blocks = self._parse_response(final_text)
                 break
 
-            fc = part.function_call
-            tool_name = fc.name
-            tool_args = dict(fc.args) if fc.args else {}
-            tool_call_count += 1
+            # Extract Thought
+            thought_match = RE_THOUGHT.search(text)
+            if thought_match and progress_callback:
+                await progress_callback(WSThought(
+                    text=thought_match.group(1).strip(), step=iteration,
+                ))
 
-            logger.info(f"Tool call #{tool_call_count}: {tool_name}({tool_args})")
+            # Extract Action
+            action_match = RE_ACTION.search(text)
+            if not action_match:
+                # No valid Action or Answer — model is rambling without ReAct format.
+                # Give it one chance to produce a proper Answer, otherwise force-extract on next miss.
+                if iteration >= self.max_iterations - 1:
+                    # Last iteration — force as final answer, stripping obvious reasoning
+                    logger.warning(f"ReAct iter {iteration}: no Action/Answer on final iter, forcing")
+                    gemini_blocks = self._parse_response(text)
+                    break
+                logger.warning(f"ReAct iter {iteration}: no Action or Answer found, nudging model")
+                current_prompt = (
+                    "You did not follow the ReAct format. You MUST respond with either:\n"
+                    "1. Thought: <reasoning>\\nAction: tool_name({\"arg\": \"value\"})\n"
+                    "2. Thought: <summary>\\nAnswer: {\"content\": \"your response\", ...}\n\n"
+                    "If you have enough information, provide your final Answer now as a JSON object."
+                )
+                continue
 
-            # Stream progress to client
+            tool_name = action_match.group(1)
+            raw_args = action_match.group(2)
+
+            # Validate tool name
+            if tool_name not in TOOL_NAMES:
+                logger.warning(f"Unknown tool: {tool_name}")
+                current_prompt = f"Observation: Error — unknown tool '{tool_name}'. Available tools: {', '.join(sorted(TOOL_NAMES))}"
+                continue
+
+            tool_args = self._parse_action_args(raw_args)
+            logger.info(f"ReAct iter {iteration}: {tool_name}({tool_args})")
+
+            # Stream tool running
             if progress_callback:
                 label = TOOL_LABELS.get(tool_name, f"Running {tool_name}")
                 await progress_callback(WSToolCall(
@@ -114,17 +222,19 @@ class ConversationalAgent:
             try:
                 result = await self.mcp.call_tool(tool_name, tool_args)
                 result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+                logger.info(f"MCP result ({tool_name}): {result_str[:300]}")
 
                 # Format result into UI blocks
                 if isinstance(result, dict):
                     blocks = format_tool_result(tool_name, result)
                     all_formatter_blocks = merge_blocks(blocks, all_formatter_blocks)
 
-                # Stream tool completion
+                # Stream tool done
                 if progress_callback:
                     preview = result_str[:200] + "..." if len(result_str) > 200 else result_str
                     await progress_callback(WSToolCall(
-                        name=tool_name, status="done", label=TOOL_LABELS.get(tool_name, ""),
+                        name=tool_name, status="done",
+                        label=TOOL_LABELS.get(tool_name, ""),
                         result_preview=preview,
                     ))
 
@@ -137,21 +247,25 @@ class ConversationalAgent:
                         label=f"Error: {str(e)[:100]}",
                     ))
 
-            # Feed tool result back to Gemini
-            response = chat.send_message(
-                content_types.to_content(
-                    genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=tool_name,
-                            response={"result": result_str},
-                        )
-                    )
-                )
-            )
+            # Truncate observation if needed
+            if len(result_str) > _MAX_OBSERVATION_LEN:
+                result_str = result_str[:_MAX_OBSERVATION_LEN] + "... (truncated)"
 
-        # Parse final text response
-        final_text = response.text if response.text else ""
-        gemini_blocks = self._parse_response(final_text)
+            current_prompt = f"Observation: {result_str}"
+
+        else:
+            # Max iterations exhausted — force a final answer
+            logger.warning(f"ReAct loop exhausted {self.max_iterations} iterations, forcing answer")
+            response = chat.send_message(
+                "You have reached the maximum number of iterations. "
+                "Based on all the information gathered so far, provide your final Answer now.\n\n"
+                "Answer:"
+            )
+            final_text = _safe_text(response)
+            # Strip leading "Answer:" if model echoes it
+            if final_text.strip().startswith("Answer:"):
+                final_text = final_text.strip()[7:].strip()
+            gemini_blocks = self._parse_response(final_text)
 
         # Merge Gemini blocks with formatter blocks
         merged = merge_blocks(gemini_blocks, all_formatter_blocks)
@@ -163,7 +277,7 @@ class ConversationalAgent:
             table["headers"] = [str(h) for h in table.get("headers", [])]
 
         return WSResponse(
-            content=merged.get("content", final_text),
+            content=merged.get("content", ""),
             entities=merged.get("entities"),
             table=table,
             chart=merged.get("chart"),
@@ -171,6 +285,7 @@ class ConversationalAgent:
             signals=merged.get("signals"),
             actions=merged.get("actions"),
             followup=merged.get("followup"),
+            thought_steps=iteration,
         )
 
     async def generate_title(self, first_message: str) -> str:
@@ -190,34 +305,27 @@ class ConversationalAgent:
             return first_message[:50] + ("..." if len(first_message) > 50 else "")
 
     @staticmethod
-    def _build_tools():
-        """Build Gemini function declarations from TOOL_DECLARATIONS."""
-        return [
-            genai.protos.Tool(
-                function_declarations=[
-                    genai.protos.FunctionDeclaration(
-                        name=td["name"],
-                        description=td["description"],
-                        parameters=genai.protos.Schema(
-                            type=genai.protos.Type.OBJECT,
-                            properties={
-                                k: genai.protos.Schema(
-                                    type=_map_type(v["type"]),
-                                    description=v.get("description", ""),
-                                )
-                                for k, v in td["parameters"]["properties"].items()
-                            },
-                            required=td["parameters"].get("required", []),
-                        ),
-                    )
-                    for td in TOOL_DECLARATIONS
-                ]
-            )
-        ]
+    def _parse_action_args(raw: str) -> dict:
+        """Parse Action arguments with 3-tier fallback: json.loads → json-repair → {}."""
+        raw = raw.strip()
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        try:
+            repaired = repair_json(raw, return_objects=True)
+            if isinstance(repaired, dict):
+                return repaired
+        except Exception:
+            pass
+
+        logger.warning(f"Could not parse action args: {raw[:200]}")
+        return {}
 
     @staticmethod
     def _parse_response(text: str) -> dict:
-        """Try to parse Gemini's response as JSON, fall back to plain text."""
+        """Parse Gemini's response as JSON with 3-tier fallback: json.loads → json-repair → plain text."""
         if not text:
             return {"content": ""}
 
@@ -233,6 +341,7 @@ class ConversationalAgent:
             stripped = stripped[:-3]
         stripped = stripped.strip()
 
+        # Tier 1: direct parse
         try:
             parsed = json.loads(stripped)
             if isinstance(parsed, dict) and "content" in parsed:
@@ -240,18 +349,13 @@ class ConversationalAgent:
         except (json.JSONDecodeError, TypeError):
             pass
 
-        # Plain text response
+        # Tier 2: json-repair
+        try:
+            repaired = repair_json(stripped, return_objects=True)
+            if isinstance(repaired, dict) and "content" in repaired:
+                return repaired
+        except Exception:
+            pass
+
+        # Tier 3: plain text fallback
         return {"content": text}
-
-
-def _map_type(type_str: str) -> int:
-    """Map JSON schema type string to Gemini proto Type enum."""
-    mapping = {
-        "string": genai.protos.Type.STRING,
-        "integer": genai.protos.Type.INTEGER,
-        "number": genai.protos.Type.NUMBER,
-        "boolean": genai.protos.Type.BOOLEAN,
-        "array": genai.protos.Type.ARRAY,
-        "object": genai.protos.Type.OBJECT,
-    }
-    return mapping.get(type_str, genai.protos.Type.STRING)

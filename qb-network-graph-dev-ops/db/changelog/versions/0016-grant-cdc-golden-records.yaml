@@ -1,0 +1,43 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0016-grant-cdc-golden-records
+      author: qb-network-graph
+      comment: >
+        Grant CDC reader SELECT on golden record tables.
+        CDC from golden_records → Flink sync → Vector Store, KG Store.
+        Requires the cdc_reader user from changeset 0011.
+      changes:
+        - sql:
+            comment: "Grant read access to golden_records"
+            sql: >
+              GRANT SELECT ON quickbooks.golden_records TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Grant read access to relationships"
+            sql: >
+              GRANT SELECT ON quickbooks.relationships TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Grant read access to resolution_audit"
+            sql: >
+              GRANT SELECT ON quickbooks.resolution_audit TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Grant read access to pending_resolution"
+            sql: >
+              GRANT SELECT ON quickbooks.pending_resolution TO 'cdc_reader'@'%';
+        - sql:
+            comment: "Flush privileges"
+            sql: >
+              FLUSH PRIVILEGES;
+
+      rollback:
+        - sql:
+            sql: >
+              REVOKE SELECT ON quickbooks.golden_records FROM 'cdc_reader'@'%';
+        - sql:
+            sql: >
+              REVOKE SELECT ON quickbooks.relationships FROM 'cdc_reader'@'%';
+        - sql:
+            sql: >
+              REVOKE SELECT ON quickbooks.resolution_audit FROM 'cdc_reader'@'%';
+        - sql:
+            sql: >
+              REVOKE SELECT ON quickbooks.pending_resolution FROM 'cdc_reader'@'%';

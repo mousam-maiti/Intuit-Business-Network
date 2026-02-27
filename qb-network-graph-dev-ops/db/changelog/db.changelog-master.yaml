@@ -1,0 +1,64 @@
+databaseChangeLog:
+  # ──────────────────────────────────────────────────────────
+  # QB Network Graph — Master Changelog
+  # ──────────────────────────────────────────────────────────
+  #
+  # 0001-0009: Existing QB application tables (CDC reads, we never write)
+  # 0010:      match_decisions (feedback loop — our system writes)
+  # 0011:      CDC reader user + permissions
+  # 0012-0015: Golden record tables (Entity Resolution Agent writes)
+  # 0016:      CDC grants for golden record tables
+  #
+  # ──────────────────────────────────────────────────────────
+
+  # --- Existing QB application tables ---
+  - include:
+      file: changelog/versions/0001-create-companies.yaml
+  - include:
+      file: changelog/versions/0002-create-vendors.yaml
+  - include:
+      file: changelog/versions/0003-create-customers.yaml
+  - include:
+      file: changelog/versions/0004-create-products-services.yaml
+  - include:
+      file: changelog/versions/0005-create-invoices.yaml
+  - include:
+      file: changelog/versions/0006-create-invoice-line-items.yaml
+  - include:
+      file: changelog/versions/0007-create-bills.yaml
+  - include:
+      file: changelog/versions/0008-create-bill-line-items.yaml
+  - include:
+      file: changelog/versions/0009-create-payments.yaml
+
+  # --- Network Graph system tables (feedback loop) ---
+  - include:
+      file: changelog/versions/0010-create-match-decisions.yaml
+
+  # --- CDC reader user + permissions ---
+  - include:
+      file: changelog/versions/0011-create-cdc-reader.yaml
+
+  # --- Golden Record tables (Entity Resolution Agent output) ---
+  - include:
+      file: changelog/versions/0012-create-golden-records.yaml
+  - include:
+      file: changelog/versions/0013-create-relationships.yaml
+  - include:
+      file: changelog/versions/0014-create-resolution-audit.yaml
+  - include:
+      file: changelog/versions/0015-create-pending-resolution.yaml
+
+  # --- CDC grants for golden record tables ---
+  - include:
+      file: changelog/versions/0016-grant-cdc-golden-records.yaml
+
+  # --- Connection alerts + entity agent tracking ---
+  - include:
+      file: changelog/versions/0017-create-connection-alerts.yaml
+  - include:
+      file: changelog/versions/0018-alter-manual-connections-agent.yaml
+
+  # --- Schema fixes ---
+  - include:
+      file: changelog/versions/0019-alter-pending-resolution-trigger-type.yaml

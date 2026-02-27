@@ -93,7 +93,7 @@ telemetry:
 
 # ── MCP Server (candidate eval, entity writer, knowledge graph) ──
 mcp_server:
-  url: http://localhost:8081/mcp
+  url: http://localhost:8083/mcp
   timeout_ms: 30000
 
 # ── MySQL (Source of Truth — v3) ────────────────────────────

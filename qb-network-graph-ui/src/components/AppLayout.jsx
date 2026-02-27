@@ -1,22 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
-  Search, Home, Globe, UserPlus, ClipboardCheck, Sparkles,
-  Menu,
+  Search, Home, Globe, ClipboardCheck, Sparkles,
+  Menu, Building2, History,
 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { ROUTES, viewToPath } from '@/config/routes';
-import { PENDING_MATCHES, ENTITIES } from '@/api/mock/data';
+import { ACME_ENTITY, config } from '@/config/env';
+import { getPendingMatches } from '@/api/matching';
+import { getEntity } from '@/api/entities';
+import { getAlerts, dismissAlert } from '@/api/alerts';
 import { useAIChat } from '@/hooks/useAIChat';
-import { AIPanel, MergeNotification } from '@/components/shared';
+import { AIPanel, AlertBanner } from '@/components/shared';
 import { wsManager } from '@/api/websocket';
 
 const SIDEBAR_ICONS = {
   dashboard: <Home size={18} />,
   network: <Globe size={18} />,
   search: <Search size={18} />,
-  connections: <UserPlus size={18} />,
   review: <ClipboardCheck size={18} />,
+  lineage: <History size={18} />,
   assist: <Sparkles size={18} />,
 };
 
@@ -26,28 +29,73 @@ export default function AppLayout() {
 
   const [aiOpen, setAiOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [privacy, setPrivacy] = useState(false);
-  const [selectedEntity, setSelectedEntity] = useState(ENTITIES[0]);
-  const [showMergeNotif, setShowMergeNotif] = useState(true);
+  const [selectedEntity, setSelectedEntity] = useState(ACME_ENTITY);
+  const [alerts, setAlerts] = useState([]);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    getPendingMatches().then(r => setPendingCount(r.data.length)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    getEntity(config.currentEntityId).then(r => {
+      if (r.data) setSelectedEntity(r.data);
+    }).catch(() => {});
+  }, []);
+
+  // Poll alerts every 5 seconds
+  useEffect(() => {
+    const fetchAlerts = () => {
+      getAlerts().then(r => {
+        const newAlerts = r.data || [];
+        setAlerts(newAlerts);
+        // Refresh pending count when a merge_review alert arrives
+        if (newAlerts.some(a => a.type === 'merge_review')) {
+          getPendingMatches().then(r2 => setPendingCount(r2.data.length)).catch(() => {});
+        }
+      }).catch(() => {});
+    };
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Current active route id — computed before useAIChat so it can be passed as context
   const activeId = ROUTES.find((r) => r.path === location.pathname)?.id || 'dashboard';
 
   const chat = useAIChat(selectedEntity, activeId);
 
-  const handleAction = (action, payload) => {
+  const handleAction = (action, payload = {}) => {
+    // Normalize payload keys — LLM may send snake_case or camelCase
+    const page = payload.page || payload.view || '';
+    const entityId = payload.entityId || payload.entity_id || '';
+    const entityName = payload.entityName || payload.entity_name || payload.name || '';
+    const query = payload.query || payload.question || '';
+
     switch (action) {
-      case 'navigate':
-        navigate(viewToPath[payload.page] || '/');
+      case 'navigate': {
+        // Match against route IDs or paths
+        const path = viewToPath[page] || viewToPath[page.toLowerCase().replace(/[\s_]/g, '')] ||
+          ROUTES.find(r => r.label.toLowerCase().includes(page.toLowerCase()))?.path || '/';
+        navigate(path);
         setAiOpen(false);
         break;
+      }
       case 'select_entity': {
-        const entity = ENTITIES.find((e) => e.id === payload.entityId);
-        if (entity) setSelectedEntity(entity);
+        if (entityId) {
+          navigate(viewToPath.network || '/network');
+          setAiOpen(false);
+          getEntity(entityId).then(r => {
+            if (r.data) setSelectedEntity(r.data);
+            else setSelectedEntity({ id: entityId, name: entityName || entityId });
+          }).catch(() => {
+            setSelectedEntity({ id: entityId, name: entityName || entityId });
+          });
+        }
         break;
       }
       case 'ask':
-        chat.setInput(payload.query);
+        chat.setInput(query);
         break;
     }
   };
@@ -55,21 +103,17 @@ export default function AppLayout() {
   // Attach onAction to chat so components can access it
   chat.onAction = handleAction;
 
-  // Dismiss notification on route change
-  const prevRoute = useRef(activeId);
-  useEffect(() => {
-    if (activeId !== prevRoute.current) {
-      setShowMergeNotif(false);
-      prevRoute.current = activeId;
-    }
-  }, [activeId]);
+  const handleDismissAlert = (id) => {
+    setAlerts(prev => prev.filter(a => a.id !== id));
+    dismissAlert(id).catch(() => {});
+  };
 
-  // Auto-dismiss notification after 10 seconds
-  useEffect(() => {
-    if (!showMergeNotif) return;
-    const t = setTimeout(() => setShowMergeNotif(false), 10000);
-    return () => clearTimeout(t);
-  }, [showMergeNotif]);
+  const handleAlertAction = (alert) => {
+    if (alert.type === 'merge_review') {
+      navigate('/review');
+      handleDismissAlert(alert.id);
+    }
+  };
 
   // Connect WebSocket on mount
   useEffect(() => {
@@ -78,7 +122,7 @@ export default function AppLayout() {
   }, []);
 
   const goTo = (id, entity) => {
-    setSelectedEntity(entity || ENTITIES[0]);
+    setSelectedEntity(entity || ACME_ENTITY);
     navigate(viewToPath[id] || '/');
     setAiOpen(false);
   };
@@ -106,7 +150,7 @@ export default function AppLayout() {
               {SIDEBAR_ICONS[route.id]}
               {route.id === 'review' && (
                 <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-white text-[9px] flex items-center justify-center font-bold" style={{ backgroundColor: QB.orange }}>
-                  {PENDING_MATCHES.length}
+                  {pendingCount}
                 </span>
               )}
             </button>
@@ -144,20 +188,20 @@ export default function AppLayout() {
             >
               <Sparkles size={13} /> Intuit Assist
             </button>
-            <div className="flex items-center gap-2 text-xs" style={{ color: QB.textMuted }}>
-              Privacy
-              <button onClick={() => setPrivacy(!privacy)} className="w-9 h-5 rounded-full relative transition-colors" style={{ backgroundColor: privacy ? QB.green : '#D0D5DD' }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" style={{ left: privacy ? '18px' : '2px' }} />
-              </button>
+            <div className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded" style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>
+              <Building2 size={13} />
+              {config.currentEntityName}
             </div>
           </div>
         </header>
 
-        {showMergeNotif && <MergeNotification onDismiss={() => setShowMergeNotif(false)} />}
+        {alerts.map(a => (
+          <AlertBanner key={a.id} alert={a} onDismiss={handleDismissAlert} onAction={handleAlertAction} />
+        ))}
 
         {/* Page content via React Router Outlet */}
         <main className="flex-1 min-h-0 overflow-hidden">
-          <Outlet context={{ selectedEntity, setSelectedEntity, privacy, chat, goTo }} />
+          <Outlet context={{ selectedEntity, setSelectedEntity, chat, goTo }} />
         </main>
       </div>
 

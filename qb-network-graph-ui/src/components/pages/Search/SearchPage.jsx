@@ -1,38 +1,61 @@
-import { useState, useMemo, useRef } from 'react';
-import { Search, Building2, ChevronRight, SortAsc } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { Search, Building2, ChevronRight, SortAsc, X } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { INDUSTRIES, getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
 import { getRelType } from '@/utils/graph';
-import { ENTITIES, RELATIONSHIPS } from '@/api/mock/data';
-import { Widget, RelTypeBadge } from '@/components/shared';
+import { getEntities } from '@/api/entities';
+import { getAllRelationships } from '@/api/relationships';
+import { getNativeOverrides, saveNativeOverride } from '@/api/native';
+import { Widget, RelTypeBadge, EntityDetailPanel } from '@/components/shared';
 
-export default function SearchPage({ onSelect }) {
+export default function SearchPage({ onNavigate }) {
   const [q, setQ] = useState('');
   const [indFilter, setIndFilter] = useState(null);
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('relevance');
   const [showTypeahead, setShowTypeahead] = useState(false);
+  const [selectedEntity, setSelectedEntity] = useState(null);
   const inputRef = useRef(null);
+
+  const [entities, setEntities] = useState([]);
+  const [relationships, setRelationships] = useState([]);
+  const [nativeOverrides, setNativeOverrides] = useState({});
+  useEffect(() => {
+    getEntities().then(r => setEntities(r.data));
+    getAllRelationships().then(r => setRelationships(r.data));
+    getNativeOverrides().then(r => setNativeOverrides(r.data));
+  }, []);
+
+  const handleSaveNative = async (entityId, overrides) => {
+    if (overrides) {
+      await saveNativeOverride(entityId, overrides);
+      setNativeOverrides((prev) => ({ ...prev, [entityId]: overrides }));
+    } else {
+      setNativeOverrides((prev) => { const next = { ...prev }; delete next[entityId]; return next; });
+    }
+  };
 
   const typeaheadResults = useMemo(() => {
     if (q.length < 2) return [];
     const lower = q.toLowerCase();
-    return ENTITIES.filter((e) =>
+    return entities.filter((e) =>
       e.name.toLowerCase().includes(lower) ||
-      e.variants.some((v) => v.toLowerCase().includes(lower)) ||
+      (e.variants || []).some((v) => v.toLowerCase().includes(lower)) ||
       getIndustry(e.industry).label.toLowerCase().includes(lower)
     ).slice(0, 5);
-  }, [q]);
+  }, [q, entities]);
+
+  const selectedEntityId = entities.length > 0 ? entities[0]?.id : null;
 
   const filtered = useMemo(() => {
-    let list = ENTITIES.filter((e) => {
+    let list = entities.filter((e) => {
       const mq = !q || e.name.toLowerCase().includes(q.toLowerCase()) || getIndustry(e.industry).label.toLowerCase().includes(q.toLowerCase());
       const mi = !indFilter || e.industry === indFilter;
-      if (typeFilter !== 'all') {
-        const hasType = RELATIONSHIPS.some((r) => {
-          if (typeFilter === 'vendor') return r.source === 'e1' && r.target === e.id;
-          return r.target === 'e1' && r.source === e.id;
+      if (typeFilter !== 'all' && selectedEntityId) {
+        const hasType = relationships.some((r) => {
+          if (typeFilter === 'vendor') return r.source === selectedEntityId && r.target === e.id;
+          return r.target === selectedEntityId && r.source === e.id;
         });
         if (!hasType) return false;
       }
@@ -42,7 +65,7 @@ export default function SearchPage({ onSelect }) {
     if (sortBy === 'connections') list = [...list].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients));
     if (sortBy === 'confidence') list = [...list].sort((a, b) => b.confidence - a.confidence);
     return list;
-  }, [q, indFilter, typeFilter, sortBy]);
+  }, [q, indFilter, typeFilter, sortBy, entities, relationships, selectedEntityId]);
 
   return (
     <div className="flex flex-col h-full">
@@ -61,16 +84,16 @@ export default function SearchPage({ onSelect }) {
               <div className="px-3 py-1.5 text-[10px] font-semibold tracking-wider" style={{ backgroundColor: '#F9FAFB', color: QB.textMuted, letterSpacing: '0.08em' }}>SUGGESTIONS &middot; &lt;30ms typeahead</div>
               {typeaheadResults.map((ent) => {
                 const ind = getIndustry(ent.industry);
-                const dr = RELATIONSHIPS.find((r) => (r.source === 'e1' && r.target === ent.id) || (r.target === 'e1' && r.source === ent.id));
+                const dr = selectedEntityId ? relationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
                 return (
-                  <div key={ent.id} onMouseDown={() => { setQ(ent.name); setShowTypeahead(false); onSelect(ent); }}
+                  <div key={ent.id} onMouseDown={() => { setQ(ent.name); setShowTypeahead(false); setSelectedEntity(ent); }}
                     className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50 border-b" style={{ borderColor: '#F0F0F0' }}>
                     <div className="w-7 h-7 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}><Building2 size={12} style={{ color: ind.color }} /></div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate" style={{ color: QB.textPrimary }}>{ent.name}</div>
                       <div className="text-[10px]" style={{ color: QB.textMuted }}>{ind.label} &middot; {ent.city}, {ent.state}</div>
                     </div>
-                    {dr && <RelTypeBadge type={getRelType(dr, 'e1')} />}
+                    {dr && <RelTypeBadge type={getRelType(dr, selectedEntityId)} />}
                     <ChevronRight size={12} style={{ color: QB.textMuted }} />
                   </div>
                 );
@@ -97,7 +120,7 @@ export default function SearchPage({ onSelect }) {
           <Widget title="INDUSTRY">
             <div className="space-y-0.5">
               {Object.entries(INDUSTRIES).slice(0, 6).map(([code, ind]) => {
-                const cnt = ENTITIES.filter((e) => e.industry === code).length;
+                const cnt = entities.filter((e) => e.industry === code).length;
                 if (!cnt) return null;
                 return (
                   <button key={code} onClick={() => setIndFilter(indFilter === code ? null : code)}
@@ -124,9 +147,11 @@ export default function SearchPage({ onSelect }) {
           </div>
           {filtered.map((ent) => {
             const ind = getIndustry(ent.industry);
-            const dr = RELATIONSHIPS.find((r) => (r.source === 'e1' && r.target === ent.id) || (r.target === 'e1' && r.source === ent.id));
+            const dr = selectedEntityId ? relationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
             return (
-              <div key={ent.id} onClick={() => onSelect(ent)} className="p-4 bg-white border rounded-sm cursor-pointer transition-all hover:shadow-sm group" style={{ borderColor: QB.cardBorder }}>
+              <div key={ent.id} onClick={() => setSelectedEntity(ent)}
+                className="p-4 bg-white border rounded-sm cursor-pointer transition-all hover:shadow-sm group"
+                style={{ borderColor: selectedEntity?.id === ent.id ? QB.green + '60' : QB.cardBorder, backgroundColor: selectedEntity?.id === ent.id ? '#F9FAFB' : undefined }}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: ind.color + '12' }}><Building2 size={14} style={{ color: ind.color }} /></div>
@@ -139,7 +164,7 @@ export default function SearchPage({ onSelect }) {
                 </div>
                 {dr && (
                   <div className="text-[11px] mt-2 flex items-center gap-2">
-                    <RelTypeBadge type={getRelType(dr, 'e1')} />
+                    <RelTypeBadge type={getRelType(dr, selectedEntityId)} />
                     <span style={{ color: QB.textMuted }}>{fmt(dr.volume)}/yr &middot; {dr.count} transactions</span>
                     {dr.status === 'dormant' && <span className="text-[9px] px-1 rounded" style={{ backgroundColor: '#F0F0F0', color: QB.dormant }}>dormant</span>}
                   </div>
@@ -148,6 +173,28 @@ export default function SearchPage({ onSelect }) {
             );
           })}
         </div>
+
+        {/* Entity detail panel */}
+        {selectedEntity && (
+          <div className="w-80 flex flex-col gap-3 overflow-y-auto shrink-0">
+            <div className="flex items-center justify-end">
+              <button onClick={() => setSelectedEntity(null)} className="p-1 rounded hover:bg-gray-100">
+                <X size={14} style={{ color: QB.textMuted }} />
+              </button>
+            </div>
+            <EntityDetailPanel
+              globalEntity={selectedEntity}
+              nativeOverride={nativeOverrides[selectedEntity.id] || null}
+              onSaveNative={handleSaveNative}
+              onOpenAI={() => onNavigate('assist', selectedEntity)}
+              onMerge={() => {}}
+              onSelectEntity={setSelectedEntity}
+              vendorRels={relationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              clientRels={relationships.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              allEntities={entities}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

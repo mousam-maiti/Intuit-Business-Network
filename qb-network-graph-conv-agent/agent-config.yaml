@@ -5,11 +5,11 @@ server:
   port: 8082
 
 mcp_server:
-  url: "http://localhost:8081/mcp"
+  url: "http://localhost:8083/mcp"
   timeout_ms: 30000
 
 llm:
-  model: "gemini-2.5-flash"
+  model: "gemini-3-pro-preview"
   temperature: 0.3
   max_tokens: 4096
   timeout_ms: 30000
@@ -25,4 +25,4 @@ mysql:
 context:
   max_messages: 30
   keep_recent: 10
-  max_tool_calls: 5
+  max_iterations: 8

@@ -1,0 +1,116 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0003-create-customers
+      author: qb-network-graph
+      comment: >
+        Businesses/people a QB user sells to. Structurally identical to vendors.
+        Same sparsity issues — homeowners especially sparse (just a name).
+        CDC → Paimon bronze.staged_customers → same resolution pipeline.
+      changes:
+        - createTable:
+            tableName: customers
+            columns:
+              - column:
+                  name: customer_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: display_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: ein
+                  type: VARCHAR(20)
+              - column:
+                  name: contact_name
+                  type: VARCHAR(255)
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+              - column:
+                  name: phone
+                  type: VARCHAR(20)
+              - column:
+                  name: category
+                  type: VARCHAR(255)
+              - column:
+                  name: commodity
+                  type: VARCHAR(500)
+              - column:
+                  name: street_address
+                  type: VARCHAR(255)
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: state
+                  type: VARCHAR(2)
+              - column:
+                  name: zip
+                  type: VARCHAR(10)
+              - column:
+                  name: website
+                  type: VARCHAR(255)
+              - column:
+                  name: expected_volume
+                  type: DECIMAL(14, 2)
+              - column:
+                  name: payment_terms
+                  type: VARCHAR(20)
+              - column:
+                  name: is_active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: customers
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_customers_company
+
+        - createIndex:
+            tableName: customers
+            indexName: idx_customers_company
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: customers
+            indexName: idx_customers_display_name
+            columns:
+              - column:
+                  name: display_name
+        - createIndex:
+            tableName: customers
+            indexName: idx_customers_ein
+            columns:
+              - column:
+                  name: ein
+        - createIndex:
+            tableName: customers
+            indexName: idx_customers_state
+            columns:
+              - column:
+                  name: state
+
+      rollback:
+        - dropTable:
+            tableName: customers

@@ -4,6 +4,7 @@ export { RelTypeBadge } from './RelTypeBadge';
 export { AIChatMessages } from './AIChatMessages';
 export { AIChatInput } from './AIChatInput';
 export { AIPanel } from './AIPanel';
-export { MergeNotification } from './MergeNotification';
+export { AlertBanner } from './AlertBanner';
 export { EntityDetailPanel } from './EntityDetailPanel';
 export { MergeFlowModal } from './MergeFlowModal';
+export { AddConnectionModal } from './AddConnectionModal';

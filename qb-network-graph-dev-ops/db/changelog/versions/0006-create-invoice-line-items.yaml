@@ -1,0 +1,63 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0006-create-invoice-line-items
+      author: qb-network-graph
+      comment: >
+        Line items on invoices. Description field is a commodity signal.
+      changes:
+        - createTable:
+            tableName: invoice_line_items
+            columns:
+              - column:
+                  name: line_item_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: invoice_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: item_id
+                  type: BIGINT UNSIGNED
+                  remarks: "Links to products_services if applicable"
+              - column:
+                  name: description
+                  type: VARCHAR(500)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: quantity
+                  type: DECIMAL(10, 2)
+                  defaultValueNumeric: 1.00
+              - column:
+                  name: unit_price
+                  type: DECIMAL(12, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: amount
+                  type: DECIMAL(12, 2)
+                  constraints:
+                    nullable: false
+
+        - addForeignKeyConstraint:
+            baseTableName: invoice_line_items
+            baseColumnNames: invoice_id
+            referencedTableName: invoices
+            referencedColumnNames: invoice_id
+            constraintName: fk_invoice_line_items_invoice
+
+        - createIndex:
+            tableName: invoice_line_items
+            indexName: idx_invoice_line_items_invoice
+            columns:
+              - column:
+                  name: invoice_id
+
+      rollback:
+        - dropTable:
+            tableName: invoice_line_items

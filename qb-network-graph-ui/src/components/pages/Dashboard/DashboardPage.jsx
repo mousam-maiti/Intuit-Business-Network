@@ -1,34 +1,53 @@
-import { useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Building2, GitBranch, Activity, Unlink, DollarSign, AlertTriangle, Info } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
-import { ENTITIES, RELATIONSHIPS, MONTHLY_VOLUME, PENDING_MATCHES } from '@/api/mock/data';
+import { getEntities } from '@/api/entities';
+import { getAllRelationships, getMonthlyVolume } from '@/api/relationships';
+import { getPendingMatches } from '@/api/matching';
 import { Widget } from '@/components/shared';
 
-export default function DashboardPage({ onNavigate }) {
-  const totalEntities = ENTITIES.length;
-  const totalRels = RELATIONSHIPS.length;
-  const activeRels = RELATIONSHIPS.filter((r) => r.status === 'active').length;
-  const dormantRels = RELATIONSHIPS.filter((r) => r.status === 'dormant').length;
-  const totalVol = RELATIONSHIPS.reduce((s, r) => s + r.volume, 0);
+export default function DashboardPage({ onNavigate, selectedEntity }) {
+  const [entities, setEntities] = useState([]);
+  const [relationships, setRelationships] = useState([]);
+  const [volume, setVolume] = useState([]);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    getEntities().then(r => setEntities(r.data));
+    getAllRelationships().then(r => setRelationships(r.data));
+    getPendingMatches().then(r => setPendingCount(r.data.length));
+  }, []);
+
+  useEffect(() => {
+    if (selectedEntity?.id) {
+      getMonthlyVolume(selectedEntity.id).then(r => setVolume(r.data));
+    }
+  }, [selectedEntity?.id]);
+
+  const totalEntities = entities.length;
+  const totalRels = relationships.length;
+  const activeRels = relationships.filter((r) => r.status === 'active').length;
+  const dormantRels = relationships.filter((r) => r.status === 'dormant').length;
+  const totalVol = relationships.reduce((s, r) => s + r.volume, 0);
 
   const sectorData = useMemo(() => {
     const m = {};
-    ENTITIES.forEach((e) => { const sec = getIndustry(e.industry).sector; m[sec] = (m[sec] || 0) + 1; });
+    entities.forEach((e) => { const sec = getIndustry(e.industry).sector; m[sec] = (m[sec] || 0) + 1; });
     return Object.entries(m).map(([name, value]) => ({ name, value }));
-  }, []);
+  }, [entities]);
   const sectorColors = ['#2CA01C', '#7C3AED', '#7c3aed', '#0077C5', '#E8710A', '#dc2626'];
 
   const typeData = [
-    { name: 'Vendors', value: RELATIONSHIPS.filter((r) => r.source === 'e1').length },
-    { name: 'Clients', value: RELATIONSHIPS.filter((r) => r.target === 'e1').length },
+    { name: 'Vendors', value: relationships.filter((r) => r.source === selectedEntity?.id).length },
+    { name: 'Clients', value: relationships.filter((r) => r.target === selectedEntity?.id).length },
   ];
 
   const topHubs = useMemo(() =>
-    [...ENTITIES].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients)).slice(0, 3),
-  []);
+    [...entities].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients)).slice(0, 3),
+  [entities]);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -95,7 +114,7 @@ export default function DashboardPage({ onNavigate }) {
           <Widget title="TRANSACTION VOLUME TREND">
             <div className="h-44">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={MONTHLY_VOLUME}>
+                <AreaChart data={volume}>
                   <XAxis dataKey="month" tick={{ fontSize: 10, fill: QB.textMuted }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10, fill: QB.textMuted }} axisLine={false} tickLine={false} width={30} />
                   <Tooltip contentStyle={{ fontSize: 11 }} />
@@ -131,7 +150,7 @@ export default function DashboardPage({ onNavigate }) {
             <div className="space-y-2">
               <div className="flex items-center gap-3 text-xs py-2 border-b" style={{ borderColor: '#F0F0F0' }}>
                 <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ backgroundColor: QB.orangeLight }}><AlertTriangle size={11} style={{ color: QB.orange }} /></div>
-                <span className="flex-1" style={{ color: QB.textPrimary }}>{PENDING_MATCHES.length} matches awaiting review</span>
+                <span className="flex-1" style={{ color: QB.textPrimary }}>{pendingCount} matches awaiting review</span>
                 <button onClick={() => onNavigate('review')} className="text-[10px] font-medium" style={{ color: QB.link }}>Review</button>
               </div>
               <div className="flex items-center gap-3 text-xs py-2">

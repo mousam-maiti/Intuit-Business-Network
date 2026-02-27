@@ -394,15 +394,6 @@ function EntityViewMode({
               )}
             </div>
           </div>
-          <span
-            className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-            style={{
-              backgroundColor: entity.confidence >= 0.9 ? QB.greenLight : QB.orangeLight,
-              color: entity.confidence >= 0.9 ? QB.greenDark : QB.orange,
-            }}
-          >
-            {Math.round(entity.confidence * 100)}%
-          </span>
         </div>
 
         {/* Nickname */}

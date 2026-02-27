@@ -1,12 +1,12 @@
 import { Sparkles, RotateCcw } from 'lucide-react';
 import { QB } from '@/constants/colors';
-import { ENTITIES } from '@/api/mock/data';
+import { ACME_ENTITY } from '@/config/env';
 import { AIChatMessages, AIChatInput } from '@/components/shared';
 
 export default function AssistPage({ chat, onResetEntity }) {
   const handleClear = () => {
     chat.clear();
-    onResetEntity?.(ENTITIES[0]);
+    onResetEntity?.(ACME_ENTITY);
   };
 
   return (

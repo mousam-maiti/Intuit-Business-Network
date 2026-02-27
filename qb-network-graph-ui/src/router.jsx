@@ -6,9 +6,9 @@ import AppLayout from '@/components/AppLayout';
 const DashboardPage = lazy(() => import('@/components/pages/Dashboard/DashboardPage'));
 const NetworkPage = lazy(() => import('@/components/pages/Network/NetworkPage'));
 const SearchPage = lazy(() => import('@/components/pages/Search/SearchPage'));
-const ConnectionsPage = lazy(() => import('@/components/pages/Connections/ConnectionsPage'));
 const ReviewPage = lazy(() => import('@/components/pages/Review/ReviewPage'));
 const AssistPage = lazy(() => import('@/components/pages/Assist/AssistPage'));
+const LineagePage = lazy(() => import('@/components/pages/Lineage/LineagePage'));
 
 function LazyWrap({ children }) {
   return (
@@ -20,36 +20,35 @@ function LazyWrap({ children }) {
 
 // Bridge wrappers — consume Outlet context and map to page props
 function DashboardWrapper() {
-  const { goTo } = useOutletContext();
-  return <LazyWrap><DashboardPage onNavigate={goTo} /></LazyWrap>;
+  const { goTo, selectedEntity } = useOutletContext();
+  return <LazyWrap><DashboardPage onNavigate={goTo} selectedEntity={selectedEntity} /></LazyWrap>;
 }
 
 function NetworkWrapper() {
-  const { selectedEntity, setSelectedEntity, privacy, goTo } = useOutletContext();
+  const { selectedEntity, setSelectedEntity, goTo } = useOutletContext();
   return (
     <LazyWrap>
       <NetworkPage
         selectedEntity={selectedEntity}
         onSelect={setSelectedEntity}
         onOpenAI={() => goTo('assist', selectedEntity)}
-        privacy={privacy}
       />
     </LazyWrap>
   );
 }
 
 function SearchWrapper() {
-  const { setSelectedEntity, goTo } = useOutletContext();
-  return <LazyWrap><SearchPage onSelect={(ent) => { setSelectedEntity(ent); goTo('network'); }} /></LazyWrap>;
-}
-
-function ConnectionsWrapper() {
   const { goTo } = useOutletContext();
-  return <LazyWrap><ConnectionsPage onNavigate={goTo} /></LazyWrap>;
+  return <LazyWrap><SearchPage onNavigate={goTo} /></LazyWrap>;
 }
 
 function ReviewWrapper() {
   return <LazyWrap><ReviewPage /></LazyWrap>;
+}
+
+function LineageWrapper() {
+  const { selectedEntity } = useOutletContext();
+  return <LazyWrap><LineagePage selectedEntity={selectedEntity} /></LazyWrap>;
 }
 
 function AssistWrapper() {
@@ -65,8 +64,8 @@ export const router = createBrowserRouter([
       { index: true,        element: <DashboardWrapper /> },
       { path: 'network',    element: <NetworkWrapper /> },
       { path: 'search',     element: <SearchWrapper /> },
-      { path: 'connections', element: <ConnectionsWrapper /> },
       { path: 'review',     element: <ReviewWrapper /> },
+      { path: 'lineage',    element: <LineageWrapper /> },
       { path: 'assist',     element: <AssistWrapper /> },
     ],
   },

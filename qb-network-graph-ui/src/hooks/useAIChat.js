@@ -1,6 +1,28 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { config } from '@/config/env';
-import { generateMockResponse, getSuggestions } from '@/api/mock/aiResponses';
+
+/**
+ * Generate contextual chat suggestions based on entity + page.
+ */
+function getSuggestions(entity, page) {
+  const name = entity?.name || 'this entity';
+  const base = [
+    `Summarize ${name}`,
+    `What risks are associated with ${name}?`,
+  ];
+  switch (page) {
+    case 'network':
+      return [...base, `Show key connections for ${name}`, 'Which vendors overlap?'];
+    case 'search':
+      return [...base, 'Find similar entities', 'Search by industry'];
+    case 'connections':
+      return [...base, `What new connections were detected for ${name}?`, 'Show manual connections'];
+    case 'review':
+      return [...base, 'Show pending matches', 'Explain matching confidence'];
+    default:
+      return [...base, 'Show dashboard summary', 'Any anomalies today?'];
+  }
+}
 
 /**
  * Generate a session ID and persist it in sessionStorage so
@@ -22,15 +44,15 @@ function getUserId() {
 /**
  * Shared hook for AI chat state — used by both AssistPage and AIPanel.
  *
- * When `useMocks` is false, connects to the conversational agent WebSocket
+ * Connects to the conversational agent WebSocket
  * at ws://localhost:8082/ws/{session_id}?user_id={user_id}.
- * When `useMocks` is true, uses the mock response generator.
  */
 export function useAIChat(selectedEntity, currentPage) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [tools, setTools] = useState([]);
+  const [thoughts, setThoughts] = useState([]);
   const [sessionTitle, setSessionTitle] = useState(null);
 
   const wsRef = useRef(null);
@@ -47,10 +69,8 @@ export function useAIChat(selectedEntity, currentPage) {
     return { entityName: selectedEntity.name, page: currentPage };
   }, [selectedEntity, currentPage]);
 
-  // ── WebSocket lifecycle (non-mock mode) ─────────────────
+  // ── WebSocket lifecycle ─────────────────────────────────
   const connectWs = useCallback(() => {
-    if (config.flags.useMocks) return;
-
     const sid = getSessionId();
     const uid = getUserId();
     const url = `${config.api.chatWsUrl}/${sid}?user_id=${uid}`;
@@ -78,9 +98,9 @@ export function useAIChat(selectedEntity, currentPage) {
 
         case 'tool_call':
           setTools((prev) => {
-            // Replace if same tool already exists (running → done), else append
-            const idx = prev.findIndex((t) => t.name === data.name && t.status === 'running');
             if (data.status === 'done' || data.status === 'error') {
+              // Find the last "running" entry for this tool and replace it
+              const idx = prev.findLastIndex((t) => t.name === data.name && t.status === 'running');
               if (idx >= 0) {
                 const copy = [...prev];
                 copy[idx] = { name: data.name, label: data.label, status: data.status };
@@ -88,13 +108,18 @@ export function useAIChat(selectedEntity, currentPage) {
               }
               return [...prev, { name: data.name, label: data.label, status: data.status }];
             }
-            return [...prev, { name: data.name, label: data.label }];
+            return [...prev, { name: data.name, label: data.label, status: 'running' }];
           });
+          break;
+
+        case 'thought':
+          setThoughts(prev => [...prev, { text: data.text, step: data.step }]);
           break;
 
         case 'response':
           setTyping(false);
           setTools([]);
+          setThoughts([]);
           setMsgs((prev) => [...prev, {
             role: 'ai',
             content: data.content || '',
@@ -111,6 +136,7 @@ export function useAIChat(selectedEntity, currentPage) {
         case 'error':
           setTyping(false);
           setTools([]);
+          setThoughts([]);
           setMsgs((prev) => [...prev, {
             role: 'ai',
             content: data.message || 'Sorry, something went wrong. Please try again.',
@@ -120,6 +146,7 @@ export function useAIChat(selectedEntity, currentPage) {
         case 'context_cleared':
           setMsgs([]);
           setTools([]);
+          setThoughts([]);
           setTyping(false);
           break;
 
@@ -146,9 +173,7 @@ export function useAIChat(selectedEntity, currentPage) {
 
   // Connect on mount, disconnect on unmount
   useEffect(() => {
-    if (!config.flags.useMocks) {
-      connectWs();
-    }
+    connectWs();
     return () => {
       clearTimeout(reconnectTimer.current);
       clearInterval(pingTimer.current);
@@ -168,65 +193,42 @@ export function useAIChat(selectedEntity, currentPage) {
     setInput('');
     setTyping(true);
     setTools([]);
+    setThoughts([]);
 
-    if (config.flags.useMocks) {
-      // Mock mode — unchanged
-      const mockCtx = { selectedEntity, currentPage };
-      const { tools: mockTools, response } = generateMockResponse(userMsg, mockCtx);
-
-      let i = 0;
-      const iv = setInterval(() => {
-        if (i < mockTools.length) {
-          const tool = mockTools[i];
-          i++;
-          setTools((p) => [...p, tool]);
-        } else {
-          clearInterval(iv);
-          setTimeout(() => {
-            setTyping(false);
-            setTools([]);
-            setMsgs((p) => [...p, { role: 'ai', ...response }]);
-          }, 600);
-        }
-      }, 700);
-    } else {
-      // WebSocket mode — send message to conversational agent
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        setTyping(false);
-        setMsgs((p) => [...p, {
-          role: 'ai',
-          content: 'Connection lost. Reconnecting...',
-        }]);
-        connectWs();
-        return;
-      }
-
-      ws.send(JSON.stringify({
-        type: 'message',
-        content: userMsg,
-        context: selectedEntity ? { selectedEntity, currentPage } : undefined,
-      }));
-      // Response arrives via ws.onmessage → tool_call* → response
+    // WebSocket mode — send message to conversational agent
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setTyping(false);
+      setMsgs((p) => [...p, {
+        role: 'ai',
+        content: 'Connection lost. Reconnecting...',
+      }]);
+      connectWs();
+      return;
     }
+
+    ws.send(JSON.stringify({
+      type: 'message',
+      content: userMsg,
+      context: selectedEntity ? { selectedEntity, currentPage } : undefined,
+    }));
+    // Response arrives via ws.onmessage → tool_call* → response
   }, [input, selectedEntity, currentPage, connectWs]);
 
   // ── Clear chat ──────────────────────────────────────────
   const clear = useCallback(() => {
-    if (!config.flags.useMocks) {
-      // Send clear_context over WebSocket
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'clear_context' }));
-        return; // state will be cleared when we receive context_cleared event
-      }
+    // Send clear_context over WebSocket
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'clear_context' }));
+      return; // state will be cleared when we receive context_cleared event
     }
-    // Mock mode or WS not connected — clear locally
+    // WS not connected — clear locally
     setMsgs([]);
     setInput('');
     setTyping(false);
     setTools([]);
   }, []);
 
-  return { msgs, input, setInput, typing, tools, send, suggestions, context, clear, sessionTitle };
+  return { msgs, input, setInput, typing, tools, thoughts, send, suggestions, context, clear, sessionTitle };
 }

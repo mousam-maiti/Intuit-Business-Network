@@ -1,0 +1,199 @@
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix qb:     <http://qb.intuit.com/ontology/> .
+
+# ============================================================
+# ONTOLOGY DECLARATION
+# ============================================================
+
+qb:BusinessNetworkOntology a owl:Ontology ;
+    rdfs:label "QuickBooks Business Network Ontology" ;
+    rdfs:comment "T-Box schema for the QB entity resolution agent and network graph." .
+
+# ============================================================
+# CLASSES — Entity Types
+# ============================================================
+
+qb:Business a rdfs:Class ;
+    rdfs:label "Business Entity" ;
+    rdfs:comment "A business in the QuickBooks network." .
+
+qb:GoldenRecord rdfs:subClassOf qb:Business ;
+    rdfs:label "Golden Record" ;
+    rdfs:comment "Resolved, canonical business entity." .
+
+qb:PhantomEntity rdfs:subClassOf qb:Business ;
+    rdfs:label "Phantom Entity" ;
+    rdfs:comment "Entity inferred from transaction counterparty data, not directly a QB user." .
+
+qb:ProvisionalEntity rdfs:subClassOf qb:Business ;
+    rdfs:label "Provisional Entity" ;
+    rdfs:comment "Entity pending human review." .
+
+# ============================================================
+# CLASSES — Taxonomy Types
+# ============================================================
+
+qb:NAICSCode a rdfs:Class ;
+    rdfs:label "NAICS Industry Code" ;
+    rdfs:comment "North American Industry Classification System code." .
+
+qb:UNSPSCCode a rdfs:Class ;
+    rdfs:label "UNSPSC Commodity Code" ;
+    rdfs:comment "United Nations Standard Products and Services Code." .
+
+qb:GeoRegion a rdfs:Class ;
+    rdfs:label "Geographic Region" ;
+    rdfs:comment "A geographic entity in the location hierarchy." .
+
+qb:State rdfs:subClassOf qb:GeoRegion ;
+    rdfs:label "US State" .
+
+qb:MetroArea rdfs:subClassOf qb:GeoRegion ;
+    rdfs:label "Metropolitan Area" .
+
+qb:City rdfs:subClassOf qb:GeoRegion ;
+    rdfs:label "City" .
+
+# ============================================================
+# OBJECT PROPERTIES — Entity Relationships
+# ============================================================
+
+qb:transactsWith a owl:SymmetricProperty ;
+    rdfs:label "transacts with" ;
+    rdfs:domain qb:Business ;
+    rdfs:range qb:Business ;
+    rdfs:comment "Undirected business transaction relationship. Money flow direction is stored on the edge, not in the property." .
+
+# skos:related is symmetric per SKOS spec, but RDFS-Plus needs
+# an explicit declaration for inference to work both directions.
+skos:related a owl:SymmetricProperty .
+
+# ============================================================
+# OBJECT PROPERTIES — Entity → Taxonomy Classification
+# ============================================================
+
+qb:operatesIn a rdf:Property ;
+    rdfs:label "operates in" ;
+    rdfs:domain qb:Business ;
+    rdfs:range qb:NAICSCode ;
+    rdfs:comment "Links a business to its NAICS industry classification." .
+
+qb:provides a rdf:Property ;
+    rdfs:label "provides" ;
+    rdfs:domain qb:Business ;
+    rdfs:range qb:UNSPSCCode ;
+    rdfs:comment "Links a business to UNSPSC commodity codes it sells/provides." .
+
+qb:procures a rdf:Property ;
+    rdfs:label "procures" ;
+    rdfs:domain qb:Business ;
+    rdfs:range qb:UNSPSCCode ;
+    rdfs:comment "Links a business to UNSPSC commodity codes it buys." .
+
+qb:locatedIn a rdf:Property ;
+    rdfs:label "located in" ;
+    rdfs:domain qb:Business ;
+    rdfs:range qb:GeoRegion ;
+    rdfs:comment "Links a business to its geographic location." .
+
+# ============================================================
+# OBJECT PROPERTIES — Geographic Hierarchy
+# ============================================================
+
+qb:withinState a rdf:Property ;
+    rdfs:label "within state" ;
+    rdfs:domain qb:GeoRegion ;
+    rdfs:range qb:State ;
+    rdfs:comment "Links a metro area or city to its containing state." .
+
+qb:withinMetro a rdf:Property ;
+    rdfs:label "within metro" ;
+    rdfs:domain qb:City ;
+    rdfs:range qb:MetroArea ;
+    rdfs:comment "Links a city to its containing metro area." .
+
+# ============================================================
+# DATATYPE PROPERTIES — Entity Attributes (A-Box usage)
+# ============================================================
+
+qb:canonicalName a rdf:Property ;
+    rdfs:label "canonical name" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "The canonical display name of the business." .
+
+qb:nameVariant a rdf:Property ;
+    rdfs:label "name variant" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Alternative name spelling or abbreviation. A business can have multiple." .
+
+qb:ein a rdf:Property ;
+    rdfs:label "EIN" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Employer Identification Number. Hard disqualifier if present and mismatched." .
+
+qb:contactName a rdf:Property ;
+    rdfs:label "contact name" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Primary contact person name." .
+
+qb:email a rdf:Property ;
+    rdfs:label "email" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Business email address." .
+
+qb:phone a rdf:Property ;
+    rdfs:label "phone" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Business phone number (digits only)." .
+
+qb:streetAddress a rdf:Property ;
+    rdfs:label "street address" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Business street address." .
+
+qb:zipCode a rdf:Property ;
+    rdfs:label "ZIP code" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "5-digit ZIP code." .
+
+qb:paymentTerms a rdf:Property ;
+    rdfs:label "payment terms" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Payment terms (Net 30, Net 60, etc.)." .
+
+qb:entityStatus a rdf:Property ;
+    rdfs:label "entity status" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "ACTIVE | PROVISIONAL | MERGED" .
+
+qb:entityType a rdf:Property ;
+    rdfs:label "entity type" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:string ;
+    rdfs:comment "QB_USER | PHANTOM" .
+
+qb:confidence a rdf:Property ;
+    rdfs:label "confidence" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:float ;
+    rdfs:comment "Entity resolution confidence score (0-1)." .
+
+qb:transactionVolume a rdf:Property ;
+    rdfs:label "transaction volume" ;
+    rdfs:domain qb:Business ;
+    rdfs:range xsd:decimal ;
+    rdfs:comment "Total transaction volume in dollars." .

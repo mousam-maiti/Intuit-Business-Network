@@ -114,6 +114,15 @@ class MySQLClient:
             row = cursor.fetchone()
             return self._deserialize_gr(row) if row else None
 
+    def get_company(self, company_id: str) -> Optional[dict]:
+        """Read a company row by PK."""
+        if self._using_mock:
+            return None
+        with self._get_conn() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM companies WHERE company_id = %s", (company_id,))
+            return cursor.fetchone()
+
     def get_all_golden_records(self, active_only: bool = True) -> list[dict]:
         """Read all golden records (for backfill/cold start)."""
         if self._using_mock:
@@ -489,6 +498,13 @@ class MySQLClient:
         if self._using_mock:
             self._mock_audit.append(audit.model_dump())
             return audit.audit_id
+
+        # Auto-populate golden_record_after when caller didn't set it
+        if audit.golden_record_after is None and audit.target_golden_id:
+            gr = self.get_golden_record(audit.target_golden_id)
+            if gr:
+                audit.golden_record_after = gr
+
         data = self._serialize_audit(audit, now)
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -522,13 +538,14 @@ class MySQLClient:
                 INSERT INTO pending_resolution (
                     match_id, orphan_golden_id, candidate_golden_id,
                     confidence, dimension_scores, reasoning, key_uncertainty,
-                    status, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDING', CURRENT_TIMESTAMP(3))
+                    trigger_type, status, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', CURRENT_TIMESTAMP(3))
             """, (
                 pending.match_id, pending.orphan_golden_id,
                 pending.candidate_golden_id, pending.confidence,
                 json.dumps(pending.dimension_scores, default=str),
                 pending.reasoning, pending.key_uncertainty,
+                pending.trigger_type,
             ))
             conn.commit()
         return pending.match_id
@@ -590,13 +607,14 @@ class MySQLClient:
                     INSERT INTO pending_resolution (
                         match_id, orphan_golden_id, candidate_golden_id,
                         confidence, dimension_scores, reasoning, key_uncertainty,
-                        status, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDING', CURRENT_TIMESTAMP(3))
+                        trigger_type, status, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', CURRENT_TIMESTAMP(3))
                 """, (
                     pending.match_id, pending.orphan_golden_id,
                     pending.candidate_golden_id, pending.confidence,
                     json.dumps(pending.dimension_scores, default=str),
                     pending.reasoning, pending.key_uncertainty,
+                    pending.trigger_type,
                 ))
                 conn.commit()
             except Exception as e:
@@ -776,6 +794,234 @@ class MySQLClient:
                 counts[val] += 1
 
         return [{"group_value": k, "count": v} for k, v in counts.most_common()]
+
+    def search_by_name(
+        self,
+        query: str,
+        state_filter: str = None,
+        city_filter: str = None,
+        naics_filter: str = None,
+        min_confidence: float = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Search golden records by name using MySQL (exact → LIKE → FULLTEXT).
+
+        Three-tier lookup:
+          1. Exact match on canonical_name (case-insensitive)
+          2. LIKE '%query%' for partial matches
+          3. FULLTEXT MATCH AGAINST for word-level search
+
+        Results are deduplicated and exact matches appear first.
+        """
+        if self._using_mock:
+            return []
+
+        conditions_base = ["gr.status != 'MERGED'"]
+        params_base = []
+        if state_filter:
+            conditions_base.append("gr.state = %s")
+            params_base.append(state_filter.upper())
+        if city_filter:
+            conditions_base.append("UPPER(gr.city) = %s")
+            params_base.append(city_filter.upper())
+        if naics_filter:
+            conditions_base.append("gr.naics_code LIKE %s")
+            params_base.append(f"{naics_filter}%")
+        if min_confidence is not None:
+            conditions_base.append("gr.confidence >= %s")
+            params_base.append(min_confidence)
+
+        where_base = " AND ".join(conditions_base)
+        query_upper = query.strip().upper()
+
+        results = []
+        seen_ids = set()
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor(dictionary=True)
+
+            # Tier 1: exact match
+            sql = f"""
+                SELECT gr.golden_record_id, gr.canonical_name, gr.state, gr.city,
+                       gr.naics_code, gr.naics_sector, gr.confidence, gr.entity_type,
+                       gr.source_count, 1.0 AS match_rank
+                FROM golden_records gr
+                WHERE UPPER(gr.canonical_name) = %s AND {where_base}
+                LIMIT %s
+            """
+            cursor.execute(sql, (query_upper, *params_base, limit))
+            for row in cursor.fetchall():
+                rid = row["golden_record_id"]
+                if rid not in seen_ids:
+                    seen_ids.add(rid)
+                    results.append(row)
+
+            # Tier 2: LIKE partial match (any word)
+            if len(results) < limit:
+                words = [w for w in query_upper.split() if len(w) > 1]
+                if words:
+                    like_conds = " OR ".join(["UPPER(gr.canonical_name) LIKE %s"] * len(words))
+                    like_params = [f"%{w}%" for w in words]
+                    sql = f"""
+                        SELECT gr.golden_record_id, gr.canonical_name, gr.state, gr.city,
+                               gr.naics_code, gr.naics_sector, gr.confidence, gr.entity_type,
+                               gr.source_count, 0.8 AS match_rank
+                        FROM golden_records gr
+                        WHERE ({like_conds}) AND {where_base}
+                        ORDER BY gr.confidence DESC
+                        LIMIT %s
+                    """
+                    cursor.execute(sql, (*like_params, *params_base, limit))
+                    for row in cursor.fetchall():
+                        rid = row["golden_record_id"]
+                        if rid not in seen_ids:
+                            seen_ids.add(rid)
+                            results.append(row)
+
+            # Tier 3: FULLTEXT search (OR logic — any word match)
+            if len(results) < limit:
+                words = [w for w in query.strip().split() if len(w) > 1]
+                ft_query = " ".join(f"{w}*" for w in words)
+                if ft_query:
+                    sql = f"""
+                        SELECT gr.golden_record_id, gr.canonical_name, gr.state, gr.city,
+                               gr.naics_code, gr.naics_sector, gr.confidence, gr.entity_type,
+                               gr.source_count, 0.6 AS match_rank
+                        FROM golden_records gr
+                        WHERE MATCH(gr.canonical_name) AGAINST(%s IN BOOLEAN MODE) AND {where_base}
+                        ORDER BY gr.confidence DESC
+                        LIMIT %s
+                    """
+                    cursor.execute(sql, (ft_query, *params_base, limit))
+                    for row in cursor.fetchall():
+                        rid = row["golden_record_id"]
+                        if rid not in seen_ids:
+                            seen_ids.add(rid)
+                            results.append(row)
+
+        return results[:limit]
+
+    def get_relationships(
+        self,
+        company_id: str,
+        connection_type: str = "all",
+        sort_by: str = "volume",
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get relationships for a company, filtered by connection type.
+
+        Args:
+            company_id: The company's ID.
+            connection_type: 'vendor' (company buys from), 'customer' (company sells to), or 'all'.
+            sort_by: Sort column: 'volume', 'count', or 'name'.
+            limit: Max results.
+
+        Returns:
+            List of relationship dicts enriched with golden record fields.
+        """
+        order_col = {
+            "volume": "transaction_volume DESC",
+            "count": "transaction_count DESC",
+            "name": "canonical_name ASC",
+        }.get(sort_by, "transaction_volume DESC")
+
+        if self._using_mock:
+            results = []
+            for rel in self._mock_relationships.values():
+                is_vendor = rel.get("source_entity_id") == company_id
+                is_customer = rel.get("target_entity_id") == company_id
+                if connection_type == "vendor" and not is_vendor:
+                    continue
+                if connection_type == "customer" and not is_customer:
+                    continue
+                if not is_vendor and not is_customer:
+                    continue
+                other_id = rel.get("target_entity_id") if is_vendor else rel.get("source_entity_id")
+                gr = self._mock_golden.get(other_id, {})
+                results.append({
+                    **rel,
+                    "canonical_name": gr.get("canonical_name", ""),
+                    "state": gr.get("state", ""),
+                    "city": gr.get("city", ""),
+                    "naics_code": gr.get("naics_code", ""),
+                    "confidence": gr.get("confidence", 0),
+                    "entity_type": gr.get("entity_type", ""),
+                    "source_count": gr.get("source_count", 1),
+                    "connection_type": "vendor" if is_vendor else "customer",
+                })
+            results.sort(
+                key=lambda r: r.get("transaction_volume") or 0, reverse=True)
+            return results[:limit]
+
+        # Build query based on connection_type
+        if connection_type == "vendor":
+            # Company is buyer (source) → vendors are targets
+            where = "r.source_entity_id = %s"
+            gr_join = "r.target_entity_id"
+            conn_label = "'vendor'"
+        elif connection_type == "customer":
+            # Company is seller (target) → customers are sources
+            where = "r.target_entity_id = %s"
+            gr_join = "r.source_entity_id"
+            conn_label = "'customer'"
+        else:
+            # Both directions
+            where = "(r.source_entity_id = %s OR r.target_entity_id = %s)"
+            gr_join = None  # handled below
+            conn_label = None
+
+        if connection_type in ("vendor", "customer"):
+            sql = f"""
+                SELECT r.edge_id, r.source_entity_id, r.target_entity_id,
+                       r.transaction_volume, r.transaction_count,
+                       r.first_transaction, r.last_transaction,
+                       gr.canonical_name, gr.state, gr.city, gr.naics_code,
+                       gr.confidence, gr.entity_type, gr.source_count,
+                       {conn_label} AS connection_type
+                FROM relationships r
+                JOIN golden_records gr ON {gr_join} = gr.golden_record_id
+                WHERE {where} AND gr.status = 'ACTIVE'
+                ORDER BY {order_col}
+                LIMIT %s
+            """
+            params = (company_id, limit)
+        else:
+            # Union both directions
+            sql = f"""
+                (SELECT r.edge_id, r.source_entity_id, r.target_entity_id,
+                        r.transaction_volume, r.transaction_count,
+                        r.first_transaction, r.last_transaction,
+                        gr.canonical_name, gr.state, gr.city, gr.naics_code,
+                        gr.confidence, gr.entity_type, gr.source_count,
+                        'vendor' AS connection_type
+                 FROM relationships r
+                 JOIN golden_records gr ON r.target_entity_id = gr.golden_record_id
+                 WHERE r.source_entity_id = %s AND gr.status = 'ACTIVE')
+                UNION ALL
+                (SELECT r.edge_id, r.source_entity_id, r.target_entity_id,
+                        r.transaction_volume, r.transaction_count,
+                        r.first_transaction, r.last_transaction,
+                        gr.canonical_name, gr.state, gr.city, gr.naics_code,
+                        gr.confidence, gr.entity_type, gr.source_count,
+                        'customer' AS connection_type
+                 FROM relationships r
+                 JOIN golden_records gr ON r.source_entity_id = gr.golden_record_id
+                 WHERE r.target_entity_id = %s AND gr.status = 'ACTIVE')
+                ORDER BY {order_col}
+                LIMIT %s
+            """
+            params = (company_id, company_id, limit)
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            for row in rows:
+                for col in ["first_transaction", "last_transaction"]:
+                    val = row.get(col)
+                    if val and not isinstance(val, str):
+                        row[col] = val.isoformat() if hasattr(val, 'isoformat') else str(val)
+            return rows
 
     def get_audit_trail(self, entity_id: str, limit: int = 50) -> list[dict]:
         """Retrieve audit trail for a golden record.

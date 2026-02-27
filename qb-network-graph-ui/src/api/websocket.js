@@ -1,15 +1,12 @@
 import { config } from '@/config/env';
-import { MockWebSocket } from './mock/wsHandlers';
 
 /**
  * WebSocket connection manager.
  * Dispatches real-time events from the CDC pipeline to subscribers.
- * Falls back to MockWebSocket when VITE_USE_MOCKS=true.
  */
 class WebSocketManager {
   constructor() {
     this.ws = null;
-    this.mock = null;
     this.listeners = new Map();
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
@@ -17,14 +14,6 @@ class WebSocketManager {
   }
 
   connect() {
-    if (!config.flags.enableWebsockets) return;
-
-    if (config.flags.useMocks) {
-      this.mock = new MockWebSocket((event) => this._dispatch(event));
-      console.log('[WS] Connected (mock mode)');
-      return;
-    }
-
     try {
       this.ws = new WebSocket(config.api.wsUrl);
 
@@ -95,10 +84,6 @@ class WebSocketManager {
     if (this.ws) {
       this.ws.close();
       this.ws = null;
-    }
-    if (this.mock) {
-      this.mock.close();
-      this.mock = null;
     }
     this.listeners.clear();
   }

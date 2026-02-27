@@ -1,0 +1,91 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0007-create-bills
+      author: qb-network-graph
+      comment: >
+        Vendor bills company (buy-side). CDC → Paimon bronze.staged_bills.
+      changes:
+        - createTable:
+            tableName: bills
+            columns:
+              - column:
+                  name: bill_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: vendor_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: bill_number
+                  type: VARCHAR(50)
+              - column:
+                  name: bill_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: due_date
+                  type: DATE
+              - column:
+                  name: total_amount
+                  type: DECIMAL(14, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(20)
+                  defaultValue: "pending"
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: bills
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_bills_company
+        - addForeignKeyConstraint:
+            baseTableName: bills
+            baseColumnNames: vendor_id
+            referencedTableName: vendors
+            referencedColumnNames: vendor_id
+            constraintName: fk_bills_vendor
+
+        - createIndex:
+            tableName: bills
+            indexName: idx_bills_company
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: bills
+            indexName: idx_bills_vendor
+            columns:
+              - column:
+                  name: vendor_id
+        - createIndex:
+            tableName: bills
+            indexName: idx_bills_date
+            columns:
+              - column:
+                  name: bill_date
+
+      rollback:
+        - dropTable:
+            tableName: bills

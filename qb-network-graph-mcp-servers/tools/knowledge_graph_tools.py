@@ -219,6 +219,58 @@ async def check_shared_context(
     }
 
 
+# ── Tool 10: batch_industry_filter ──────────────────────────
+
+@mcp.tool()
+async def batch_industry_filter(
+    reference_naics: str,
+    candidates: list[dict],
+    ctx: Context = None,
+) -> dict:
+    """Check which candidates are related to a reference NAICS code via ontology.
+
+    Compares a reference NAICS code (e.g., lumber 423310) against multiple
+    candidate NAICS codes in a single call. Much faster than calling
+    query_ontology once per candidate.
+
+    Args:
+        reference_naics: The NAICS code representing the target industry (e.g., "423310" for lumber).
+        candidates: List of dicts with at least 'naics_code' and 'name' fields.
+            Example: [{"naics_code": "236220", "name": "Acme", "golden_record_id": "G-xxx"}]
+
+    Returns:
+        Dict with 'matches' (related candidates) and 'unmatched_count'.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    matches = []
+    for c in candidates:
+        code = c.get("naics_code") or ""
+        if not code:
+            continue
+        # Check industry relation
+        result = _query_ontology_internal(app, "INDUSTRY_RELATION", reference_naics, code)
+        if result.get("related"):
+            matches.append({**c, "relationship": result.get("relationship_type", ""), "explanation": result.get("explanation", "")})
+            continue
+        # Check commodity relation
+        result = _query_ontology_internal(app, "COMMODITY_RELATION", reference_naics, code)
+        if result.get("related"):
+            matches.append({**c, "relationship": "COMMODITY_LINK", "explanation": f"Shared commodity taxonomy (distance {result.get('semantic_distance', '?')})"})
+            continue
+        # Check same 2-digit sector
+        if len(reference_naics) >= 2 and len(code) >= 2 and reference_naics[:2] == code[:2]:
+            matches.append({**c, "relationship": "SAME_SECTOR", "explanation": f"Same NAICS sector ({code[:2]})"})
+
+    return {
+        "reference_naics": reference_naics,
+        "matches": matches,
+        "match_count": len(matches),
+        "unmatched_count": len(candidates) - len(matches),
+        "total_candidates": len(candidates),
+    }
+
+
 # ── Tool 6: write_entity_triples ────────────────────────────
 
 @mcp.tool()

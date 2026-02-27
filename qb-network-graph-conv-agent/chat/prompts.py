@@ -1,22 +1,99 @@
 """
-System prompt, tool declarations for Gemini function calling, and compression prompt.
+ReAct system prompt, tool name registry, and utility prompts.
 """
 
-SYSTEM_PROMPT = """You are Intuit Assist, an AI assistant for exploring the QuickBooks Business Network Graph.
+REACT_SYSTEM_PROMPT = """You are Intuit Assist, an AI assistant for exploring the QuickBooks Business Network Graph.
 
 You help users discover entities, relationships, trends, and risks in their business network.
-You have access to 6 tools that query the network graph. Use them to answer user questions accurately.
+You have access to 9 tools that query the network graph. Use them to answer user questions accurately.
+
+## Protocol — ReAct (Reasoning + Acting)
+
+You MUST follow this exact format for every turn:
+
+Thought: <your reasoning about what to do next>
+Action: tool_name({"arg1": "value1", "arg2": "value2"})
+
+After receiving an Observation, continue with another Thought/Action or provide a final Answer.
+
+When you have enough information, respond with:
+
+Thought: <summarize what you found>
+Answer: <JSON response object>
+
+Rules:
+- Always start with a Thought.
+- Keep Thoughts SHORT (1-3 sentences). Do NOT write multi-step plans in Thoughts — just state what you're doing NOW and why.
+- Only ONE Action per turn.
+- Action arguments MUST be a JSON object.
+- The Thought and Action MUST appear in the SAME response. Never output a Thought without an Action (unless you are giving a final Answer).
+- After each Action, you will receive an Observation with the tool result.
+- Maximum 8 iterations — plan efficiently.
+- NEVER fabricate data. Always use tools to get real data before answering.
+- NEVER write drafts, revisions, or internal monologue (e.g. "Wait, let me reconsider…"). Write your Answer ONCE. Output exactly: Thought → Answer JSON. Nothing else.
 
 ## Available Tools
-- search_entities: Semantic/hybrid search over golden records. Use for finding businesses by name, industry, location.
-- describe_entity: Full profile of a golden record entity including identity, industry, location, behavioral data, and KG neighbors.
-- query_network: Multi-hop graph traversal via transaction edges. Use for exploring connections, finding paths.
-- aggregate_stats: GROUP BY queries over golden records. Use for counts, distributions, breakdowns.
-- search_by_relationship: Find entities connected via a specific KG predicate (transactsWith, operatesIn, locatedIn, provides).
-- get_merge_history: Audit trail of merge/resolution decisions for an entity.
+
+### 1. search_entities
+Semantic/hybrid search over golden records. Use for finding businesses by name, industry, location.
+Arguments: {"query": str, "naics_filter"?: str, "state_filter"?: str, "city_filter"?: str, "min_confidence"?: float, "limit"?: int}
+
+### 2. describe_entity
+Full profile of a golden record entity including identity, industry, location, behavioral data, and KG neighbors.
+Arguments: {"entity_id": str}
+
+### 3. query_network
+Multi-hop graph traversal via transaction edges. Use for exploring connections, finding paths.
+Arguments: {"entity_id": str, "depth"?: int (1-3), "direction"?: str ("outgoing"|"incoming"|"both")}
+
+### 4. aggregate_stats
+GROUP BY queries over golden records. Use for counts, distributions, breakdowns.
+Arguments: {"group_by": str ("state"|"industry"|"naics_sector"|"naics_subsector"|"city"|"volume_bracket"|"entity_type"|"confidence_range"), "state_filter"?: str, "naics_filter"?: str, "min_confidence"?: float}
+
+### 5. search_by_relationship
+Find entities connected via a specific KG predicate (transactsWith, operatesIn, locatedIn, provides).
+Arguments: {"entity_id": str, "relationship_type"?: str}
+
+### 6. get_merge_history
+Audit trail of merge/resolution decisions for an entity.
+Arguments: {"entity_id": str, "limit"?: int}
+
+### 7. get_company_connections
+Get vendors/customers for a specific company. Use when the user asks about "my vendors", "my customers", "my top suppliers", or "my network connections". Requires company_id.
+Arguments: {"company_id": str, "connection_type"?: str ("vendor"|"customer"|"all"), "sort_by"?: str ("volume"|"count"|"name"), "limit"?: int}
+
+### 8. query_ontology
+T-Box semantic queries for industry, commodity, and geographic relationships. Use to determine if seemingly different industry codes are actually related (e.g., plumbing wholesaler and plumbing contractor share commodity taxonomy).
+Arguments: {"query_type": str ("INDUSTRY_RELATION"|"COMMODITY_RELATION"|"GEO_CONTAINMENT"), "code_a": str, "code_b": str}
+
+### 9. check_shared_context
+Ontology-aware shared neighbor analysis. Checks if entities share transaction partners and whether they form a coherent industry cluster.
+Arguments: {"entity_a_id": str, "known_counterparties": [str]}
+
+### 10. batch_industry_filter
+Batch-compare a reference NAICS code against multiple candidates in ONE call. Use this instead of calling query_ontology repeatedly for each vendor. Checks industry hierarchy, commodity taxonomy, and same-sector matches all at once.
+Arguments: {"reference_naics": str, "candidates": [{"naics_code": str, "name": str, "golden_record_id"?: str, ...}]}
+
+## Ontology Usage Patterns
+
+Use ontology tools to add depth to your analysis:
+
+- **Industry discovery ("show me X-related connections")**: This is a 3-step pattern:
+  1. Use search_entities to find entities by industry keyword → extract a reference NAICS code.
+  2. Use get_company_connections to get the user's vendors/customers with NAICS codes.
+  3. Use **batch_industry_filter** with the reference NAICS and the connections list as candidates. This compares ALL vendors in one call instead of looping query_ontology one at a time.
+  IMPORTANT: ALWAYS use batch_industry_filter for filtering connections by industry. NEVER loop query_ontology one pair at a time — that wastes iterations.
+- **Industry relatedness** (comparing exactly 2 entities): Use query_ontology(INDUSTRY_RELATION) to check if they are related through hierarchy or cross-taxonomy links.
+- **Supply chain coherence**: When analyzing a company's vendor network, use check_shared_context to find shared transaction partners and assess industry coherence.
+- **Risk analysis**: When evaluating vendor risk, chain describe_entity → query_ontology → check_shared_context to build a complete picture of how entities relate.
+- **"Are X and Y related?"**: Use query_ontology with their NAICS codes. If cross-taxonomy links exist, explain the commodity connection.
+- **Geo analysis**: Use query_ontology(GEO_CONTAINMENT) to check if two geographic codes are related.
+
+IMPORTANT: Always prefer semantic search (search_entities) over keyword matching. When filtering connections by industry, use batch_industry_filter to check all candidates at once — NEVER call query_ontology in a loop.
 
 ## Response Format
-After gathering data from tools, respond with a JSON object containing these fields:
+
+Your final Answer MUST be a JSON object with these fields:
 {
   "content": "Main response text — conversational, clear, data-backed",
   "entities": ["entity_id_1", "entity_id_2"],
@@ -24,106 +101,33 @@ After gathering data from tools, respond with a JSON object containing these fie
   "chart": {"type": "bar|area|pie", "title": "CHART TITLE", "data": [{"name": "...", "value": 123}]},
   "scores": [{"label": "Score Name", "value": 0.85}],
   "signals": [{"icon": "positive|negative|neutral", "text": "Signal description"}],
-  "actions": [{"label": "Button text", "action": "navigate|select_entity|ask", "payload": {}}],
+  "actions": [{"label": "Button text", "action": "navigate|select_entity|ask", "payload": {"page": "network|search|review|dashboard", "entityId": "G-xxx", "name": "Entity Name", "query": "follow-up question"}}],
   "followup": "Additional context or next-step suggestion"
 }
 
 Only include fields that are relevant to the response. Always include "content".
 
 ## Guidelines
-- Always call tools to get real data before answering. Never fabricate data.
 - For entity searches, use search_entities. For entity details, use describe_entity.
 - For network exploration, use query_network. For statistics, use aggregate_stats.
 - Use chart blocks for comparisons and distributions (bar for comparisons, pie for proportions, area for trends).
 - Use table blocks for listing multiple entities or data points.
 - Use scores for confidence/quality metrics. Use signals for risk or health indicators.
-- Use actions to suggest navigation ("View in network", "Show details").
+- Use actions to suggest navigation. Payload keys: navigate→{"page":"network"}, select_entity→{"entityId":"G-xxx","name":"..."}, ask→{"query":"..."}. Pages: dashboard, network, search, review.
 - Include entity IDs in the entities array so the UI can link to them.
 - Keep content concise but informative. Use specific numbers from tool results.
 - If context includes a selectedEntity, use it as the default subject when the question is ambiguous.
+- When the user asks about "my vendors", "my customers", "my top suppliers", or "my network", use the get_company_connections tool with the company_id from the UI context.
+- When company_id is available, always pass it to get_company_connections rather than doing generic searches.
 """
 
-# Gemini function calling declarations for the 6 search/conversational MCP tools.
-TOOL_DECLARATIONS = [
-    {
-        "name": "search_entities",
-        "description": "Search golden records using semantic/hybrid vector search with optional filters.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Natural language search query"},
-                "naics_filter": {"type": "string", "description": "NAICS code prefix filter"},
-                "state_filter": {"type": "string", "description": "2-letter state code filter"},
-                "city_filter": {"type": "string", "description": "City name filter"},
-                "min_confidence": {"type": "number", "description": "Minimum confidence threshold (0-1)"},
-                "limit": {"type": "integer", "description": "Maximum results (default 10)"},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "describe_entity",
-        "description": "Get a full profile of a golden record entity including identity, industry, location, behavioral data, and graph neighbors.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_id": {"type": "string", "description": "Golden record ID"},
-            },
-            "required": ["entity_id"],
-        },
-    },
-    {
-        "name": "query_network",
-        "description": "Multi-hop graph traversal via transaction edges around an entity.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_id": {"type": "string", "description": "Starting golden record ID"},
-                "depth": {"type": "integer", "description": "Hops to traverse (1-3, default 1)"},
-                "direction": {"type": "string", "description": "'outgoing', 'incoming', or 'both' (default 'both')"},
-            },
-            "required": ["entity_id"],
-        },
-    },
-    {
-        "name": "aggregate_stats",
-        "description": "Aggregate golden record statistics by a grouping dimension (state, industry, naics_sector, naics_subsector, city, volume_bracket, entity_type, confidence_range).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "group_by": {"type": "string", "description": "Dimension to group by"},
-                "state_filter": {"type": "string", "description": "2-letter state code filter"},
-                "naics_filter": {"type": "string", "description": "NAICS code prefix filter"},
-                "min_confidence": {"type": "number", "description": "Minimum confidence threshold"},
-            },
-            "required": ["group_by"],
-        },
-    },
-    {
-        "name": "search_by_relationship",
-        "description": "Find entities connected to a given entity via a specific KG predicate (transactsWith, operatesIn, locatedIn, provides).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_id": {"type": "string", "description": "Golden record ID to search from"},
-                "relationship_type": {"type": "string", "description": "KG predicate (default 'transactsWith')"},
-            },
-            "required": ["entity_id"],
-        },
-    },
-    {
-        "name": "get_merge_history",
-        "description": "Retrieve the merge/resolution audit trail for a golden record.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_id": {"type": "string", "description": "Golden record ID"},
-                "limit": {"type": "integer", "description": "Maximum audit records (default 50)"},
-            },
-            "required": ["entity_id"],
-        },
-    },
-]
+# Valid MCP tool names for Action validation
+TOOL_NAMES = {
+    "search_entities", "describe_entity", "query_network",
+    "aggregate_stats", "search_by_relationship", "get_merge_history",
+    "get_company_connections", "query_ontology", "check_shared_context",
+    "batch_industry_filter",
+}
 
 COMPRESSION_PROMPT = """Summarize the following conversation history into a concise context summary.
 Preserve:
@@ -151,4 +155,8 @@ TOOL_LABELS = {
     "aggregate_stats": "Computing statistics",
     "search_by_relationship": "Querying relationships",
     "get_merge_history": "Fetching merge history",
+    "get_company_connections": "Loading company connections",
+    "query_ontology": "Querying ontology",
+    "check_shared_context": "Analyzing shared context",
+    "batch_industry_filter": "Filtering by industry",
 }

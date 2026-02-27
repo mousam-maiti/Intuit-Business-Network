@@ -51,7 +51,7 @@ class MCPConfig:
 
 @dataclass
 class LLMConfig:
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3-pro-preview"
     temperature: float = 0.3
     max_tokens: int = 4096
     timeout_ms: int = 30000
@@ -71,7 +71,7 @@ class MySQLConfig:
 class ContextConfig:
     max_messages: int = 30
     keep_recent: int = 10
-    max_tool_calls: int = 5
+    max_iterations: int = 8
 
 
 @dataclass
@@ -132,6 +132,6 @@ def load_config(path: str | None = None) -> AgentConfig:
 
     cfg.context.max_messages = _env("CONTEXT_MAX_MESSAGES", cfg.context.max_messages, int)
     cfg.context.keep_recent = _env("CONTEXT_KEEP_RECENT", cfg.context.keep_recent, int)
-    cfg.context.max_tool_calls = _env("CONTEXT_MAX_TOOL_CALLS", cfg.context.max_tool_calls, int)
+    cfg.context.max_iterations = _env("CONTEXT_MAX_ITERATIONS", cfg.context.max_iterations, int)
 
     return cfg
