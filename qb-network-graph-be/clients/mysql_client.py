@@ -1,17 +1,23 @@
 """
 MySQL client for the REST API backend.
 
-Direct queries against golden_records, relationships, and the 4 new tables.
-Entity shape transformation: golden_record row -> UI Entity dict.
+After the golden record migration to Neo4j (Phase 6), MySQL retains:
+  - Source data: companies, bills, invoices, payments
+  - Pending resolution: OLTP work queue for human review
+  - Connections: auto_connections, manual_connections
+  - Alerts: connection_alerts
+  - Native overrides & merges: user customizations
+
+Entity reads (golden_records), graph queries (relationships), audit trail,
+and search now live in Neo4j (neo4j_client.py).
 """
 from __future__ import annotations
 import json
 import logging
 import re
 import uuid
-from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 from config import MySQLConfig
@@ -60,52 +66,6 @@ def _parse_json(val):
     return val
 
 
-def _gr_snapshot(row: dict | None) -> dict | None:
-    """Serialize a golden_records row to a JSON-safe dict for audit snapshots."""
-    if not row:
-        return None
-    out = {}
-    for k, v in row.items():
-        if hasattr(v, "isoformat"):
-            out[k] = v.isoformat()
-        elif isinstance(v, (int, float, str, bool, type(None))):
-            out[k] = v
-        else:
-            out[k] = str(v)
-    return out
-
-
-def _to_entity(row: dict, vendor_count: int = 0, client_count: int = 0) -> dict:
-    """Transform a golden_records row into the UI Entity shape."""
-    persona = _parse_json(row.get("persona")) or {}
-    identity = persona.get("identity", {}) if isinstance(persona, dict) else {}
-    name_variants = _parse_json(row.get("name_variants")) or []
-    commodities = _parse_json(row.get("commodity_keywords")) or []
-
-    return {
-        "id": row.get("golden_record_id"),
-        "name": row.get("canonical_name"),
-        "ein": _format_ein(row.get("ein")),
-        "contactName": row.get("contact_name"),
-        "email": row.get("email"),
-        "phone": _format_phone(row.get("phone_digits")),
-        "website": identity.get("website"),
-        "industry": row.get("naics_code"),
-        "naics": row.get("naics_code"),
-        "legalStructure": identity.get("legal_structure"),
-        "address": row.get("street_address"),
-        "city": row.get("city"),
-        "state": row.get("state"),
-        "zip": row.get("zip5"),
-        "confidence": float(row["confidence"]) if row.get("confidence") is not None else None,
-        "vendors": vendor_count,
-        "clients": client_count,
-        "volume": float(row["total_volume"]) if row.get("total_volume") is not None else 0,
-        "variants": name_variants if isinstance(name_variants, list) else [],
-        "commodities": commodities if isinstance(commodities, list) else [],
-    }
-
-
 def _time_ago(dt) -> str:
     """Convert a datetime to a human-readable 'X ago' string."""
     if not dt:
@@ -136,7 +96,7 @@ def _time_ago(dt) -> str:
 
 
 class MySQLClient:
-    """MySQL client for the REST API backend."""
+    """MySQL client for source data, pending resolution, connections, alerts, and native features."""
 
     def __init__(self, cfg: MySQLConfig):
         self._cfg = cfg
@@ -173,7 +133,7 @@ class MySQLClient:
         logger.info("MySQL connection pool released")
 
     # ═══════════════════════════════════════════════════════════
-    # COMPANY
+    # SOURCE DATA: COMPANY
     # ═══════════════════════════════════════════════════════════
 
     def get_company(self, company_id: str) -> dict | None:
@@ -184,22 +144,7 @@ class MySQLClient:
             row = cursor.fetchone()
         if not row:
             return None
-        # Count vendor + client relationships and total bill volume
         cid = str(row["company_id"])
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            # Vendors: company is source (company pays vendor)
-            cursor.execute(
-                "SELECT COUNT(*) AS cnt FROM relationships WHERE source_entity_id = %s",
-                (cid,),
-            )
-            vendor_count = cursor.fetchone()["cnt"]
-            # Clients: company is target (client pays company)
-            cursor.execute(
-                "SELECT COUNT(*) AS cnt FROM relationships WHERE target_entity_id = %s",
-                (cid,),
-            )
-            client_count = cursor.fetchone()["cnt"]
         with self._get_conn() as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
@@ -223,298 +168,19 @@ class MySQLClient:
             "state": row.get("state"),
             "zip": row.get("zip"),
             "confidence": 1.0,
-            "vendors": vendor_count,
-            "clients": client_count,
+            "vendors": 0,
+            "clients": 0,
             "volume": total_volume,
             "variants": [row["legal_name"]] if row.get("legal_name") else [],
             "commodities": [row["industry_category"]] if row.get("industry_category") else [],
         }
 
     # ═══════════════════════════════════════════════════════════
-    # ENTITIES
-    # ═══════════════════════════════════════════════════════════
-
-    def get_entities(self, q: str = None, industry: str = None, company_id: str = None) -> list[dict]:
-        """List entities with vendor/client counts. Avoids N+1."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-
-            conditions = ["gr.status != 'MERGED'"]
-            params = []
-
-            # When company_id is provided, scope to entities connected to that company
-            # Vendors: company is source → entity is target
-            # Customers: entity is source → company is target
-            company_join = ""
-            if company_id:
-                company_join = """
-                INNER JOIN (
-                    SELECT DISTINCT target_entity_id AS entity_id
-                    FROM relationships WHERE source_entity_id = %s
-                    UNION
-                    SELECT DISTINCT source_entity_id AS entity_id
-                    FROM relationships WHERE target_entity_id = %s
-                ) company_rels ON gr.golden_record_id = company_rels.entity_id"""
-                params.extend([company_id, company_id])
-
-            if q:
-                conditions.append(
-                    "(gr.canonical_name LIKE %s OR gr.name_variants LIKE %s)"
-                )
-                like = f"%{q}%"
-                params.extend([like, like])
-            if industry:
-                conditions.append("gr.naics_code LIKE %s")
-                params.append(f"{industry}%")
-
-            where = " AND ".join(conditions)
-            sql = f"""
-                SELECT gr.*,
-                       COALESCE(vc.cnt, 0) AS vendor_count,
-                       COALESCE(cc.cnt, 0) AS client_count
-                FROM golden_records gr
-                {company_join}
-                LEFT JOIN (
-                    SELECT target_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY target_entity_id
-                ) vc ON gr.golden_record_id = vc.target_entity_id
-                LEFT JOIN (
-                    SELECT source_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY source_entity_id
-                ) cc ON gr.golden_record_id = cc.source_entity_id
-                WHERE {where}
-                ORDER BY gr.canonical_name
-            """
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-
-        entities = [
-            _to_entity(r, int(r.get("vendor_count", 0)), int(r.get("client_count", 0)))
-            for r in rows
-        ]
-
-        # Include the company entity itself when scoping by company_id
-        if company_id:
-            company = self.get_company(company_id)
-            if company:
-                entities.insert(0, company)
-
-        return entities
-
-    def get_entity(self, entity_id: str) -> dict | None:
-        """Single entity with vendor/client counts."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
-                SELECT gr.*,
-                       COALESCE(vc.cnt, 0) AS vendor_count,
-                       COALESCE(cc.cnt, 0) AS client_count
-                FROM golden_records gr
-                LEFT JOIN (
-                    SELECT target_entity_id, COUNT(*) cnt
-                    FROM relationships WHERE target_entity_id = %s
-                ) vc ON gr.golden_record_id = vc.target_entity_id
-                LEFT JOIN (
-                    SELECT source_entity_id, COUNT(*) cnt
-                    FROM relationships WHERE source_entity_id = %s
-                ) cc ON gr.golden_record_id = cc.source_entity_id
-                WHERE gr.golden_record_id = %s
-                """,
-                (entity_id, entity_id, entity_id),
-            )
-            row = cursor.fetchone()
-        if not row:
-            return self.get_company(entity_id)
-        return _to_entity(row, int(row.get("vendor_count", 0)), int(row.get("client_count", 0)))
-
-    def patch_entity(self, entity_id: str, fields: dict) -> dict | None:
-        """Partial update on golden_records. Maps UI field names to DB columns."""
-        field_map = {
-            "name": "canonical_name",
-            "contactName": "contact_name",
-            "email": "email",
-            "phone": "phone_digits",
-            "address": "street_address",
-            "city": "city",
-            "state": "state",
-            "zip": "zip5",
-            "industry": "naics_code",
-            "naics": "naics_code",
-        }
-        sets = []
-        params = []
-        for ui_key, val in fields.items():
-            db_col = field_map.get(ui_key)
-            if db_col:
-                sets.append(f"{db_col} = %s")
-                if db_col == "phone_digits":
-                    params.append(re.sub(r'\D', '', val) if val else None)
-                else:
-                    params.append(val)
-
-        if not sets:
-            return self.get_entity(entity_id)
-
-        params.append(entity_id)
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE golden_records SET {', '.join(sets)} WHERE golden_record_id = %s",
-                params,
-            )
-            conn.commit()
-        return self.get_entity(entity_id)
-
-    # ═══════════════════════════════════════════════════════════
-    # RELATIONSHIPS
-    # ═══════════════════════════════════════════════════════════
-
-    def get_all_relationships(self, company_id: str = None) -> list[dict]:
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            if company_id:
-                cursor.execute("""
-                    SELECT edge_id, source_entity_id, target_entity_id,
-                           transaction_volume, transaction_count,
-                           first_transaction, last_transaction, status
-                    FROM relationships
-                    WHERE source_entity_id = %s OR target_entity_id = %s
-                """, (company_id, company_id))
-            else:
-                cursor.execute("""
-                    SELECT edge_id, source_entity_id, target_entity_id,
-                           transaction_volume, transaction_count,
-                           first_transaction, last_transaction, status
-                    FROM relationships
-                """)
-            rows = cursor.fetchall()
-        return [self._rel_to_dict(r) for r in rows]
-
-    def get_entity_relationships(self, entity_id: str) -> list[dict]:
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT edge_id, source_entity_id, target_entity_id,
-                       transaction_volume, transaction_count,
-                       first_transaction, last_transaction, status
-                FROM relationships
-                WHERE source_entity_id = %s OR target_entity_id = %s
-            """, (entity_id, entity_id))
-            rows = cursor.fetchall()
-        return [self._rel_to_dict(r) for r in rows]
-
-    def _rel_to_dict(self, row: dict) -> dict:
-        vol = row.get("transaction_volume")
-        # Use the table's status column if present, else derive from last_transaction
-        status = row.get("status", "active")
-        if not status or status == "ACTIVE":
-            status = "active"
-        elif status == "DORMANT":
-            status = "dormant"
-        else:
-            status = status.lower()
-        return {
-            "source": row.get("source_entity_id"),
-            "target": row.get("target_entity_id"),
-            "volume": float(vol) if vol is not None else None,
-            "count": row.get("transaction_count"),
-            "status": status,
-        }
-
-    # ═══════════════════════════════════════════════════════════
-    # NETWORK (BFS ego graph)
-    # ═══════════════════════════════════════════════════════════
-
-    def get_network(self, entity_id: str, depth: int = 2) -> dict:
-        """BFS ego network: entities + relationships within depth."""
-        visited = {entity_id}
-        frontier = {entity_id}
-        all_rels = []
-
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-
-            for _ in range(depth):
-                if not frontier:
-                    break
-                placeholders = ",".join(["%s"] * len(frontier))
-                cursor.execute(f"""
-                    SELECT edge_id, source_entity_id, target_entity_id,
-                           transaction_volume, transaction_count,
-                           first_transaction, last_transaction
-                    FROM relationships
-                    WHERE source_entity_id IN ({placeholders})
-                       OR target_entity_id IN ({placeholders})
-                """, list(frontier) + list(frontier))
-                rows = cursor.fetchall()
-                next_frontier = set()
-                for r in rows:
-                    all_rels.append(r)
-                    for eid in [r["source_entity_id"], r["target_entity_id"]]:
-                        if eid not in visited:
-                            next_frontier.add(eid)
-                            visited.add(eid)
-                frontier = next_frontier
-
-            # Batch-fetch entities
-            if visited:
-                placeholders = ",".join(["%s"] * len(visited))
-                cursor.execute(f"""
-                    SELECT gr.*,
-                           COALESCE(vc.cnt, 0) AS vendor_count,
-                           COALESCE(cc.cnt, 0) AS client_count
-                    FROM golden_records gr
-                    LEFT JOIN (
-                        SELECT target_entity_id, COUNT(*) cnt
-                        FROM relationships GROUP BY target_entity_id
-                    ) vc ON gr.golden_record_id = vc.target_entity_id
-                    LEFT JOIN (
-                        SELECT source_entity_id, COUNT(*) cnt
-                        FROM relationships GROUP BY source_entity_id
-                    ) cc ON gr.golden_record_id = cc.source_entity_id
-                    WHERE gr.golden_record_id IN ({placeholders})
-                      AND gr.status != 'MERGED'
-                """, list(visited))
-                entity_rows = cursor.fetchall()
-            else:
-                entity_rows = []
-
-        entities = [
-            _to_entity(r, int(r.get("vendor_count", 0)), int(r.get("client_count", 0)))
-            for r in entity_rows
-        ]
-
-        # If seed entity is a company (not in golden_records), include it
-        seed_in_results = any(e["id"] == entity_id for e in entities)
-        if not seed_in_results:
-            company = self.get_company(entity_id)
-            if company:
-                entities.insert(0, company)
-
-        # Deduplicate rels and keep only those with both endpoints in visited
-        seen_edges = set()
-        relationships = []
-        for r in all_rels:
-            eid = r.get("edge_id")
-            if eid in seen_edges:
-                continue
-            seen_edges.add(eid)
-            src, tgt = r["source_entity_id"], r["target_entity_id"]
-            if src in visited and tgt in visited:
-                relationships.append(self._rel_to_dict(r))
-
-        return {"entities": entities, "relationships": relationships}
-
-    # ═══════════════════════════════════════════════════════════
-    # MONTHLY VOLUME
+    # SOURCE DATA: MONTHLY VOLUME (bills table)
     # ═══════════════════════════════════════════════════════════
 
     def get_monthly_volume(self, entity_id: str, company_id: str = None) -> list[dict]:
-        """Monthly volume trend from bills table.
-        - Company ID: all bills for that company
-        - Golden record ID: bills for vendor IDs resolved to that golden record (scoped to company)
-        """
+        """Monthly volume trend from bills table."""
         months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         with self._get_conn() as conn:
@@ -558,65 +224,15 @@ class MySQLClient:
             return result[-12:]
 
     # ═══════════════════════════════════════════════════════════
-    # SEARCH (FULLTEXT)
-    # ═══════════════════════════════════════════════════════════
-
-    def search_entities(
-        self, q: str = None, industry: str = None, sort_by: str = None,
-    ) -> list[dict]:
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-
-            conditions = ["gr.status != 'MERGED'"]
-            params = []
-            order = "gr.canonical_name ASC"
-
-            if q:
-                conditions.append(
-                    "MATCH(gr.canonical_name) AGAINST(%s IN BOOLEAN MODE)"
-                )
-                params.append(f"{q}*")
-            if industry:
-                conditions.append("gr.naics_code LIKE %s")
-                params.append(f"{industry}%")
-
-            if sort_by == "volume":
-                order = "gr.total_volume DESC"
-            elif sort_by == "confidence":
-                order = "gr.confidence DESC"
-            elif sort_by == "connections":
-                order = "(COALESCE(vc.cnt, 0) + COALESCE(cc.cnt, 0)) DESC"
-
-            where = " AND ".join(conditions)
-            sql = f"""
-                SELECT gr.*,
-                       COALESCE(vc.cnt, 0) AS vendor_count,
-                       COALESCE(cc.cnt, 0) AS client_count
-                FROM golden_records gr
-                LEFT JOIN (
-                    SELECT target_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY target_entity_id
-                ) vc ON gr.golden_record_id = vc.target_entity_id
-                LEFT JOIN (
-                    SELECT source_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY source_entity_id
-                ) cc ON gr.golden_record_id = cc.source_entity_id
-                WHERE {where}
-                ORDER BY {order}
-            """
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-
-        return [
-            _to_entity(r, int(r.get("vendor_count", 0)), int(r.get("client_count", 0)))
-            for r in rows
-        ]
-
-    # ═══════════════════════════════════════════════════════════
-    # MATCHING / PENDING RESOLUTION
+    # PENDING RESOLUTION (OLTP work queue)
     # ═══════════════════════════════════════════════════════════
 
     def get_pending_matches(self) -> list[dict]:
+        """Pending matches with orphan/candidate data.
+
+        Note: This still reads from golden_records + pending_resolution via MySQL.
+        Transitional until pending_resolution is fully decoupled from golden_records.
+        """
         with self._get_conn() as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute("""
@@ -638,7 +254,7 @@ class MySQLClient:
             candidate_entity = None
             cid = pr.get("candidate_golden_id")
             if cid:
-                candidate_entity = self.get_entity(cid)
+                candidate_entity = self._get_entity_for_pending(cid)
 
             dim_scores = _parse_json(pr.get("dimension_scores")) or {}
             if "identity" in dim_scores:
@@ -647,7 +263,6 @@ class MySQLClient:
             orphan_state = pr.get("orphan_state") or ""
             location = f"{orphan_city}, {orphan_state}".strip(", ")
 
-            # Shared neighbors: entities connected to both orphan and candidate
             shared = []
             if cid and pr.get("orphan_golden_id"):
                 shared = self._get_shared_neighbors(pr["orphan_golden_id"], cid)
@@ -666,8 +281,46 @@ class MySQLClient:
             })
         return results
 
+    def _get_entity_for_pending(self, entity_id: str) -> dict | None:
+        """Read a golden record for pending match display (transitional)."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(
+                "SELECT * FROM golden_records WHERE golden_record_id = %s",
+                (entity_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        persona = _parse_json(row.get("persona")) or {}
+        identity = persona.get("identity", {}) if isinstance(persona, dict) else {}
+        name_variants = _parse_json(row.get("name_variants")) or []
+        commodities = _parse_json(row.get("commodity_keywords")) or []
+        return {
+            "id": row.get("golden_record_id"),
+            "name": row.get("canonical_name"),
+            "ein": _format_ein(row.get("ein")),
+            "contactName": row.get("contact_name"),
+            "email": row.get("email"),
+            "phone": _format_phone(row.get("phone_digits")),
+            "website": identity.get("website"),
+            "industry": row.get("naics_code"),
+            "naics": row.get("naics_code"),
+            "legalStructure": identity.get("legal_structure"),
+            "address": row.get("street_address"),
+            "city": row.get("city"),
+            "state": row.get("state"),
+            "zip": row.get("zip5"),
+            "confidence": float(row["confidence"]) if row.get("confidence") is not None else None,
+            "vendors": 0,
+            "clients": 0,
+            "volume": float(row["total_volume"]) if row.get("total_volume") is not None else 0,
+            "variants": name_variants if isinstance(name_variants, list) else [],
+            "commodities": commodities if isinstance(commodities, list) else [],
+        }
+
     def _get_shared_neighbors(self, id_a: str, id_b: str) -> list[str]:
-        """Find entity names connected to both id_a and id_b."""
+        """Find entity names connected to both id_a and id_b (transitional)."""
         with self._get_conn() as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute("""
@@ -696,6 +349,9 @@ class MySQLClient:
 
         accept → execute full merge (golden records + audit).
         reject → mark pending as REJECTED, mark orphan GR as REJECTED.
+
+        Note: This still writes to golden_records + resolution_audit via MySQL.
+        Transitional until pending resolution is fully decoupled.
         """
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
@@ -729,12 +385,14 @@ class MySQLClient:
         return {"matchId": match_id, "resolution": resolution, "resolvedAt": now_iso}
 
     def _execute_accepted_merge(self, match_id: str, now: datetime):
-        """Single-transaction merge: update survivor GR, mark orphan MERGED, update pending, write audit."""
+        """Single-transaction merge: update survivor GR, mark orphan MERGED, update pending, write audit.
+
+        Transitional: still operates on MySQL golden_records + resolution_audit.
+        """
         with self._get_conn() as conn:
             try:
                 cursor = conn.cursor(dictionary=True)
 
-                # 1. Fetch pending_resolution row
                 cursor.execute("SELECT * FROM pending_resolution WHERE match_id = %s", (match_id,))
                 pr = cursor.fetchone()
                 if not pr:
@@ -743,7 +401,6 @@ class MySQLClient:
                 orphan_id = pr["orphan_golden_id"]
                 candidate_id = pr["candidate_golden_id"]
 
-                # 2. Fetch both golden records
                 cursor.execute("SELECT * FROM golden_records WHERE golden_record_id = %s", (orphan_id,))
                 orphan_gr = cursor.fetchone()
                 cursor.execute("SELECT * FROM golden_records WHERE golden_record_id = %s", (candidate_id,))
@@ -751,7 +408,6 @@ class MySQLClient:
                 if not orphan_gr or not candidate_gr:
                     raise ValueError(f"Golden record(s) not found: orphan={orphan_id}, candidate={candidate_id}")
 
-                # 3. Merge into candidate (survivor)
                 orphan_variants = _parse_json(orphan_gr.get("name_variants")) or []
                 candidate_variants = _parse_json(candidate_gr.get("name_variants")) or []
                 merged_variants = list(set(candidate_variants) | set(orphan_variants))
@@ -781,15 +437,13 @@ class MySQLClient:
                     candidate_id,
                 ))
 
-                # 4. Mark orphan as MERGED
                 cursor.execute("""
                     UPDATE golden_records
                     SET status = 'MERGED', merged_into = %s, updated_at = %s
                     WHERE golden_record_id = %s
                 """, (candidate_id, now, orphan_id))
 
-                # 4b. Migrate orphan's relationships to survivor
-                #     First collect existing survivor edges to avoid duplicates
+                # Migrate orphan's relationships to survivor
                 cursor.execute(
                     "SELECT source_entity_id, target_entity_id FROM relationships WHERE source_entity_id = %s OR target_entity_id = %s",
                     (candidate_id, candidate_id),
@@ -806,10 +460,8 @@ class MySQLClient:
                     new_src = candidate_id if edge["source_entity_id"] == orphan_id else edge["source_entity_id"]
                     new_tgt = candidate_id if edge["target_entity_id"] == orphan_id else edge["target_entity_id"]
                     if new_src == new_tgt:
-                        # Self-loop after merge — delete
                         cursor.execute("DELETE FROM relationships WHERE edge_id = %s", (edge["edge_id"],))
                     elif (new_src, new_tgt) in existing:
-                        # Duplicate — delete orphan edge
                         cursor.execute("DELETE FROM relationships WHERE edge_id = %s", (edge["edge_id"],))
                     else:
                         cursor.execute(
@@ -818,19 +470,29 @@ class MySQLClient:
                         )
                         existing.add((new_src, new_tgt))
 
-                # 5. Update pending_resolution
                 cursor.execute("""
                     UPDATE pending_resolution
                     SET status = 'MERGED', reviewer = 'user', reviewed_at = %s
                     WHERE match_id = %s
                 """, (now, match_id))
 
-                # 6. Write resolution_audit with before/after snapshots
                 audit_id = f"A-{uuid.uuid4().hex[:8]}"
                 trigger_type = pr.get("trigger_type", "AI_AGENT")
 
+                def _gr_snapshot(row):
+                    if not row:
+                        return None
+                    out = {}
+                    for k, v in row.items():
+                        if hasattr(v, "isoformat"):
+                            out[k] = v.isoformat()
+                        elif isinstance(v, (int, float, str, bool, type(None))):
+                            out[k] = v
+                        else:
+                            out[k] = str(v)
+                    return out
+
                 gr_before = _gr_snapshot(candidate_gr)
-                # Re-fetch survivor after UPDATE to capture merged state
                 cursor.execute("SELECT * FROM golden_records WHERE golden_record_id = %s", (candidate_id,))
                 gr_after = _gr_snapshot(cursor.fetchone())
 
@@ -866,7 +528,6 @@ class MySQLClient:
                     now,
                 ))
 
-                # 7. Commit
                 conn.commit()
                 logger.info(f"Accepted merge: {orphan_id} → {candidate_id} (match={match_id})")
 
@@ -874,127 +535,6 @@ class MySQLClient:
                 conn.rollback()
                 logger.error(f"Accepted merge ROLLED BACK: match_id={match_id}")
                 raise
-
-    def resolve_adhoc(self, name: str = None, ein: str = None,
-                      city: str = None, state: str = None,
-                      industry: str = None) -> dict:
-        """Ad-hoc entity resolution: Tier 0 / 1 / 2."""
-        import time
-        start = time.monotonic()
-
-        # Tier 1: EIN exact match
-        if ein:
-            ein_clean = re.sub(r'\D', '', ein)
-            if len(ein_clean) >= 9:
-                entity = self._find_by_ein(ein_clean)
-                if entity:
-                    elapsed = int((time.monotonic() - start) * 1000)
-                    return {
-                        "tier": 1,
-                        "match": entity,
-                        "confidence": 0.99,
-                        "latency": f"{elapsed}ms",
-                        "scores": {"name": 1.0, "industry": 1.0, "location": 1.0, "commodity": 1.0},
-                    }
-
-        # Tier 2: Name FULLTEXT search
-        if name and len(name) > 3:
-            candidates = self._fulltext_candidates(name, state, industry)
-            if candidates:
-                elapsed = int((time.monotonic() - start) * 1000)
-                return {
-                    "tier": 2,
-                    "candidates": candidates,
-                    "latency": f"{elapsed}ms",
-                }
-
-        # Tier 0: No match
-        return {"tier": 0, "match": None}
-
-    def _find_by_ein(self, ein_clean: str) -> dict | None:
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT gr.*,
-                       COALESCE(vc.cnt, 0) AS vendor_count,
-                       COALESCE(cc.cnt, 0) AS client_count
-                FROM golden_records gr
-                LEFT JOIN (
-                    SELECT target_entity_id, COUNT(*) cnt
-                    FROM relationships WHERE target_entity_id IN (
-                        SELECT golden_record_id FROM golden_records WHERE ein = %s
-                    )
-                ) vc ON gr.golden_record_id = vc.target_entity_id
-                LEFT JOIN (
-                    SELECT source_entity_id, COUNT(*) cnt
-                    FROM relationships WHERE source_entity_id IN (
-                        SELECT golden_record_id FROM golden_records WHERE ein = %s
-                    )
-                ) cc ON gr.golden_record_id = cc.source_entity_id
-                WHERE gr.ein = %s AND gr.status != 'MERGED'
-                LIMIT 1
-            """, (ein_clean, ein_clean, ein_clean))
-            row = cursor.fetchone()
-        if not row:
-            return None
-        return _to_entity(row, int(row.get("vendor_count", 0)), int(row.get("client_count", 0)))
-
-    def _fulltext_candidates(self, name: str, state: str = None,
-                             industry: str = None) -> list[dict]:
-        """FULLTEXT search returning scored candidates."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-
-            conditions = [
-                "MATCH(gr.canonical_name) AGAINST(%s IN BOOLEAN MODE)",
-                "gr.status != 'MERGED'",
-            ]
-            params = [f"{name}*"]
-
-            if state:
-                conditions.append("gr.state = %s")
-                params.append(state)
-
-            where = " AND ".join(conditions)
-            cursor.execute(f"""
-                SELECT gr.*,
-                       COALESCE(vc.cnt, 0) AS vendor_count,
-                       COALESCE(cc.cnt, 0) AS client_count,
-                       MATCH(gr.canonical_name) AGAINST(%s IN BOOLEAN MODE) AS relevance
-                FROM golden_records gr
-                LEFT JOIN (
-                    SELECT target_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY target_entity_id
-                ) vc ON gr.golden_record_id = vc.target_entity_id
-                LEFT JOIN (
-                    SELECT source_entity_id, COUNT(*) cnt
-                    FROM relationships GROUP BY source_entity_id
-                ) cc ON gr.golden_record_id = cc.source_entity_id
-                WHERE {where}
-                ORDER BY relevance DESC
-                LIMIT 5
-            """, [f"{name}*"] + params)
-            rows = cursor.fetchall()
-
-        candidates = []
-        for r in rows:
-            entity = _to_entity(r, int(r.get("vendor_count", 0)), int(r.get("client_count", 0)))
-            # Simple scoring
-            name_score = min(float(r.get("relevance", 0)) / 10.0, 1.0)
-            state_score = 1.0 if state and r.get("state") == state else 0.5
-            industry_score = 1.0 if industry and r.get("naics_code", "").startswith(industry[:4] if industry else "") else 0.5
-            confidence = round(name_score * 0.5 + state_score * 0.25 + industry_score * 0.25, 2)
-            candidates.append({
-                "entity": entity,
-                "confidence": confidence,
-                "scores": {
-                    "name": round(name_score, 2),
-                    "industry": round(industry_score, 2),
-                    "location": round(state_score, 2),
-                    "commodity": 0.5,
-                },
-            })
-        return candidates
 
     # ═══════════════════════════════════════════════════════════
     # CONNECTIONS
@@ -1012,13 +552,12 @@ class MySQLClient:
 
         results = []
         for r in rows:
-            entity = self.get_entity(r["entity_id"])
             results.append({
                 "id": r["connection_id"],
                 "type": r["conn_type"],
                 "source": r.get("source_doc"),
                 "sourceDate": r.get("source_date"),
-                "entity": entity,
+                "entity": {"id": r.get("entity_id")},
                 "resolution": r.get("resolution_type", "auto"),
                 "tier": r.get("tier", 1),
                 "confidence": float(r["confidence"]) if r.get("confidence") is not None else None,
@@ -1039,15 +578,11 @@ class MySQLClient:
 
         results = []
         for r in rows:
-            entity = None
-            if r.get("entity_id"):
-                entity = self.get_entity(r["entity_id"])
-            if not entity:
-                entity = _parse_json(r.get("entity_snapshot"))
+            entity = _parse_json(r.get("entity_snapshot"))
             results.append({
                 "id": r["connection_id"],
                 "type": r["conn_type"],
-                "entity": entity,
+                "entity": entity or {"id": r.get("entity_id")},
                 "addedVia": r.get("added_via"),
                 "confidence": float(r["confidence"]) if r.get("confidence") is not None else None,
                 "time": _time_ago(r.get("created_at")),
@@ -1075,23 +610,10 @@ class MySQLClient:
             ))
             conn.commit()
 
-        entity = None
-        if entity_id:
-            entity = self.get_entity(entity_id)
-        if not entity:
-            entity = entity_data or {
-                "id": f"e-{uuid.uuid4().hex[:8]}",
-                "name": payload.get("name", "New entity"),
-                "industry": "236220",
-                "city": payload.get("city", "Unknown"),
-                "state": payload.get("state", "TX"),
-                "vendors": 0, "clients": 0, "volume": 0, "variants": [],
-            }
-
         return {
             "id": conn_id,
             "type": conn_type,
-            "entity": entity,
+            "entity": entity_data or {"id": entity_id},
             "addedVia": added_via,
             "confidence": confidence,
             "time": "Just now",
@@ -1233,7 +755,6 @@ class MySQLClient:
             """, (f"$.{field}", user_id, entity_id))
             conn.commit()
 
-            # Clean up if empty
             cursor2 = conn.cursor(dictionary=True)
             cursor2.execute(
                 "SELECT overrides FROM native_overrides WHERE user_id = %s AND entity_id = %s",
@@ -1314,167 +835,6 @@ class MySQLClient:
             )
             conn.commit()
         return result
-
-    # ═══════════════════════════════════════════════════════════
-    # LINEAGE / AUDIT
-    # ═══════════════════════════════════════════════════════════
-
-    def get_lineage_entities(self) -> list[dict]:
-        """Distinct golden records that have audit data."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT DISTINCT ra.target_golden_id AS id,
-                       gr.canonical_name AS name, gr.naics_code AS industry
-                FROM resolution_audit ra
-                JOIN golden_records gr ON gr.golden_record_id = ra.target_golden_id
-                WHERE gr.status = 'ACTIVE'
-                ORDER BY gr.canonical_name
-            """)
-            return cursor.fetchall()
-
-    def get_audit_trail(self, entity_id: str, limit: int = 100) -> list[dict]:
-        """Full audit trail for an entity, ascending by date."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT * FROM resolution_audit
-                WHERE target_golden_id = %s OR absorbed_golden_id = %s
-                ORDER BY created_at ASC
-                LIMIT %s
-            """, (entity_id, entity_id, limit))
-            rows = cursor.fetchall()
-
-        json_cols = ("dimension_scores", "key_factors", "evaluation_chain",
-                     "golden_record_before", "golden_record_after")
-        for row in rows:
-            for col in json_cols:
-                if col in row:
-                    row[col] = _parse_json(row[col])
-            row["entity_id"] = entity_id
-            # Serialize datetimes for JSON response
-            for key in ("created_at",):
-                val = row.get(key)
-                if val and hasattr(val, "isoformat"):
-                    row[key] = val.isoformat()
-        return rows
-
-    def get_entity_snapshot(self, entity_id: str, date: str) -> dict | None:
-        """Last golden_record_after at or before the given date."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT golden_record_after FROM resolution_audit
-                WHERE (target_golden_id = %s OR absorbed_golden_id = %s)
-                  AND created_at <= %s
-                ORDER BY created_at DESC LIMIT 1
-            """, (entity_id, entity_id, date))
-            row = cursor.fetchone()
-        if not row:
-            return None
-        return _parse_json(row["golden_record_after"])
-
-    def restore_entity(self, entity_id: str, snapshot: dict, audit_id: str) -> dict:
-        """Restore a golden record to a previous snapshot state.
-
-        Writes the snapshot fields back to golden_records and creates
-        a RESTORE audit entry referencing the source audit_id.
-        """
-        now = datetime.now(timezone.utc)
-
-        with self._get_conn() as conn:
-            try:
-                cursor = conn.cursor(dictionary=True)
-
-                # 1. Capture current state as "before"
-                cursor.execute("SELECT * FROM golden_records WHERE golden_record_id = %s",
-                               (entity_id,))
-                current = cursor.fetchone()
-                if not current:
-                    return {"success": False, "error": "Entity not found"}
-                gr_before = _gr_snapshot(current)
-
-                # 2. Update golden_records with snapshot values
-                cursor.execute("""
-                    UPDATE golden_records SET
-                        canonical_name = %s, ein = %s, phone_digits = %s,
-                        email = %s, contact_name = %s,
-                        naics_code = %s, naics_sector = %s, naics_subsector = %s,
-                        state = %s, city = %s, zip5 = %s, zip3 = %s,
-                        street_address = %s, commodity_keywords = %s,
-                        total_volume = %s, avg_transaction = %s,
-                        transaction_count = %s, volume_bracket = %s,
-                        source_count = %s, confidence = %s,
-                        name_variants = %s, persona = %s,
-                        updated_at = %s
-                    WHERE golden_record_id = %s
-                """, (
-                    snapshot.get("canonical_name"),
-                    snapshot.get("ein"),
-                    snapshot.get("phone_digits"),
-                    snapshot.get("email"),
-                    snapshot.get("contact_name"),
-                    snapshot.get("naics_code"),
-                    snapshot.get("naics_sector"),
-                    snapshot.get("naics_subsector"),
-                    snapshot.get("state"),
-                    snapshot.get("city"),
-                    snapshot.get("zip5"),
-                    snapshot.get("zip3"),
-                    snapshot.get("street_address"),
-                    json.dumps(snapshot.get("commodity_keywords")) if isinstance(snapshot.get("commodity_keywords"), (list, dict)) else snapshot.get("commodity_keywords"),
-                    snapshot.get("total_volume"),
-                    snapshot.get("avg_transaction"),
-                    snapshot.get("transaction_count"),
-                    snapshot.get("volume_bracket"),
-                    snapshot.get("source_count"),
-                    snapshot.get("confidence"),
-                    json.dumps(snapshot.get("name_variants")) if isinstance(snapshot.get("name_variants"), (list, dict)) else snapshot.get("name_variants"),
-                    json.dumps(snapshot.get("persona")) if isinstance(snapshot.get("persona"), (dict,)) else snapshot.get("persona"),
-                    now,
-                    entity_id,
-                ))
-
-                # 3. Re-read the updated row for "after"
-                cursor.execute("SELECT * FROM golden_records WHERE golden_record_id = %s",
-                               (entity_id,))
-                gr_after = _gr_snapshot(cursor.fetchone())
-
-                # 4. Insert RESTORE audit entry
-                new_audit_id = f"A-{uuid.uuid4().hex[:8]}"
-                cursor.execute("""
-                    INSERT INTO resolution_audit (
-                        audit_id, event_id, record_id, perspective, decision,
-                        trigger_type, target_golden_id,
-                        confidence, reasoning,
-                        golden_record_before, golden_record_after, created_at
-                    ) VALUES (%s, %s, %s, 'GLOBAL', 'RESTORE',
-                              'USER_ACTION', %s,
-                              %s, %s,
-                              %s, %s, %s)
-                """, (
-                    new_audit_id,
-                    f"restore-{audit_id}",
-                    entity_id,
-                    entity_id,
-                    snapshot.get("confidence", 0),
-                    f"User restored entity to state from audit {audit_id}",
-                    json.dumps(gr_before, default=str),
-                    json.dumps(gr_after, default=str),
-                    now,
-                ))
-
-                conn.commit()
-                return {"success": True, "audit_id": new_audit_id}
-
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Restore ROLLED BACK for {entity_id}: {e}")
-                return {"success": False, "error": str(e)}
-
-    # ═══════════════════════════════════════════════════════════
-    # NATIVE MERGES
-    # ═══════════════════════════════════════════════════════════
 
     def _merge_to_dict(self, row: dict) -> dict:
         created = row.get("created_at")

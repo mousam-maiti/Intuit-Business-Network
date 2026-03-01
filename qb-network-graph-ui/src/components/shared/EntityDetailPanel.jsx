@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check } from 'lucide-react';
+import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
@@ -341,7 +341,7 @@ function EntityEditMode({ globalEntity, nativeOverride, onSave, onCancel }) {
 
 function EntityViewMode({
   globalEntity, nativeOverride, entity, onOpenAI, onEdit, onMerge,
-  onSelectEntity, vendorRels, clientRels, allEntities,
+  onSelectEntity, onTraceSupplyChain, vendorRels, clientRels, allEntities,
 }) {
   const [showProfile, setShowProfile] = useState(false);
 
@@ -531,6 +531,13 @@ function EntityViewMode({
           style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>
           <Sparkles size={11} /> Ask Intuit Assist
         </button>
+        {onTraceSupplyChain && (
+          <button onClick={() => onTraceSupplyChain(entity)}
+            className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-gray-50"
+            style={{ borderColor: QB.cardBorder, color: QB.textSecondary }}>
+            <Network size={11} /> Trace supply chain
+          </button>
+        )}
       </Widget>
 
       {/* Vendors list */}
@@ -598,6 +605,7 @@ export function EntityDetailPanel({
   onOpenAI,
   onMerge,
   onSelectEntity,
+  onTraceSupplyChain,
   vendorRels = [],
   clientRels = [],
   allEntities = [],
@@ -635,6 +643,7 @@ export function EntityDetailPanel({
       onEdit={() => setEditing(true)}
       onMerge={onMerge}
       onSelectEntity={onSelectEntity}
+      onTraceSupplyChain={onTraceSupplyChain}
       vendorRels={vendorRels}
       clientRels={clientRels}
       allEntities={allEntities}

@@ -1,7 +1,10 @@
 """
-Knowledge graph tools — extracted from KnowledgeGraphServer.
+Knowledge graph tools — T-Box ontology queries + graph analytics via Neo4j.
 
-4 tools: query_ontology, check_shared_context, write_entity_triples, write_merge_redirect
+Tools: query_ontology, check_shared_context, batch_industry_filter,
+       find_shortest_path, find_common_neighbors, detect_cluster, assess_risk_impact
+
+All entity reads come from Neo4j (primary store). MySQL fallbacks removed.
 """
 from __future__ import annotations
 import logging
@@ -18,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 def _query_ontology_internal(app: AppContext, query_type: str, code_a: str, code_b: str) -> dict:
     """Internal ontology query — called by compare_fields for cross-taxonomy links."""
-    if not app.graphdb.available:
-        return _fallback_ontology(code_a, code_b)
-
     if query_type == "INDUSTRY_RELATION":
         return _query_industry_relation(app, code_a, code_b)
     elif query_type == "COMMODITY_RELATION":
@@ -33,10 +33,15 @@ def _query_ontology_internal(app: AppContext, query_type: str, code_a: str, code
 
 def _query_industry_relation(app: AppContext, code_a: str, code_b: str) -> dict:
     start = time.time()
-    path_a = app.graphdb.query_naics_hierarchy(code_a)
-    path_b = app.graphdb.query_naics_hierarchy(code_b)
-    lca = app.graphdb.query_lowest_common_ancestor(code_a, code_b)
-    cross_links = app.graphdb.query_cross_taxonomy_links(code_a, code_b)
+
+    # Pure-Python NAICS hierarchy (no DB needed)
+    from clients.neo4j_client import Neo4jClient
+    path_a = Neo4jClient.query_naics_hierarchy(code_a)
+    path_b = Neo4jClient.query_naics_hierarchy(code_b)
+    lca = Neo4jClient.query_lowest_common_ancestor(code_a, code_b)
+
+    # Cross-taxonomy links: Neo4j if available, else static fallback
+    cross_links = app.neo4j.query_cross_taxonomy_links(code_a, code_b)
 
     if code_a == code_b:
         distance, rel_type = 0.0, "SAME"
@@ -104,33 +109,6 @@ def _query_geo_containment(geo_a: str, geo_b: str) -> dict:
     }
 
 
-def _fallback_ontology(code_a: str, code_b: str) -> dict:
-    """Fallback when GraphDB is unavailable — conservative string prefix matching."""
-    if not code_a or not code_b:
-        return {"related": False, "relationship_type": "UNRELATED",
-                "semantic_distance": 1.0, "cross_taxonomy_links": [],
-                "explanation": "Ontology unavailable, codes missing"}
-    shared_prefix = 0
-    for a, b in zip(code_a, code_b):
-        if a == b:
-            shared_prefix += 1
-        else:
-            break
-
-    if shared_prefix >= 4:
-        return {"related": True, "relationship_type": "SIBLING",
-                "semantic_distance": 0.2, "cross_taxonomy_links": [],
-                "explanation": f"Prefix match ({shared_prefix} digits) — likely related"}
-    elif shared_prefix >= 2:
-        return {"related": True, "relationship_type": "ANCESTOR",
-                "semantic_distance": 0.5, "cross_taxonomy_links": [],
-                "explanation": f"Same sector ({code_a[:2]}) — possibly related"}
-    else:
-        return {"related": False, "relationship_type": "UNRELATED",
-                "semantic_distance": 0.8, "cross_taxonomy_links": [],
-                "explanation": "Different sectors, no ontology available"}
-
-
 # ── Tool 4: query_ontology ──────────────────────────────────
 
 @mcp.tool()
@@ -180,23 +158,22 @@ async def check_shared_context(
     """
     app: AppContext = ctx.request_context.lifespan_context
 
-    if not app.graphdb.available:
+    if not app.neo4j.available:
         return {"shared_neighbors": [], "industry_coherence": 0.0,
-                "supporting_evidence": "GraphDB unavailable"}
+                "supporting_evidence": "Neo4j unavailable — shared neighbor analysis disabled"}
 
-    a_neighbors = app.graphdb.query_shared_neighbors(entity_a_id)
-    a_neighbor_ids = {n.get("neighbor", "").split("/")[-1] for n in a_neighbors}
+    a_neighbors = app.neo4j.get_entity_neighbors(entity_a_id, direction="both")
+    a_neighbor_ids = {n.get("id", "") for n in a_neighbors}
 
     shared = []
     for cp_id in known_counterparties:
         if cp_id in a_neighbor_ids:
-            for n in a_neighbors:
-                if n.get("neighbor", "").split("/")[-1] == cp_id:
-                    shared.append({
-                        "entity_id": cp_id,
-                        "name": n.get("name", ""),
-                        "industry_naics": n.get("naics", ""),
-                    })
+            gr_data = app.neo4j.get_golden_record(cp_id)
+            shared.append({
+                "entity_id": cp_id,
+                "name": gr_data.get("canonical_name", "") if gr_data else "",
+                "industry_naics": gr_data.get("naics_code", "") if gr_data else "",
+            })
 
     coherence = 0.0
     if shared:
@@ -271,71 +248,253 @@ async def batch_industry_filter(
     }
 
 
-# ── Tool 6: write_entity_triples ────────────────────────────
+# ── Tool 12: find_shortest_path ──────────────────────────────
 
 @mcp.tool()
-async def write_entity_triples(
-    entity_id: str,
-    attrs: dict,
+async def find_shortest_path(
+    entity_a: str,
+    entity_b: str,
     ctx: Context = None,
 ) -> dict:
-    """Write A-Box triples for entity lifecycle events (create/update).
-
-    Creates or updates an entity's RDF triples in the knowledge graph,
-    including NAICS classification, geo location, name variants, and identity.
+    """Find the shortest connection path between any two entities in the network.
 
     Args:
-        entity_id: Golden record ID.
-        attrs: Dict with canonical_name, entity_type, confidence, naics_codes, name_variants, etc.
+        entity_a: Golden record ID of the first entity.
+        entity_b: Golden record ID of the second entity.
 
     Returns:
-        Dict with 'success' bool, 'triples_written' count, 'fallback_to_changelog' flag.
+        Dict with 'chain' (enriched nodes), 'edges', 'hops', and 'duration_ms'.
     """
     app: AppContext = ctx.request_context.lifespan_context
+    start = time.time()
 
-    if not app.graphdb.available:
-        logger.warning(f"GraphDB unavailable — falling back to changelog for {entity_id}")
-        return {"success": False, "triples_written": 0, "fallback_to_changelog": True}
+    if not app.neo4j.available:
+        return {"chain": [], "edges": [], "hops": -1,
+                "error": "Neo4j unavailable — cannot find shortest path",
+                "duration_ms": int((time.time() - start) * 1000)}
 
-    count = app.graphdb.create_entity_triples(entity_id, attrs)
+    raw = app.neo4j.find_shortest_path(entity_a, entity_b)
+    if raw:
+        # Neo4j Entity nodes have all fields — no MySQL enrichment needed
+        chain = []
+        for node in raw.get("chain", []):
+            chain.append({
+                "id": node.get("id", ""),
+                "name": node.get("name", ""),
+                "type": node.get("type", ""),
+            })
+        return {
+            "chain": chain,
+            "edges": raw.get("edges", []),
+            "hops": raw.get("hops", 0),
+            "duration_ms": int((time.time() - start) * 1000),
+        }
     return {
-        "success": count > 0,
-        "triples_written": count,
-        "fallback_to_changelog": False,
+        "chain": [], "edges": [], "hops": -1,
+        "message": "No path found between the two entities.",
+        "duration_ms": int((time.time() - start) * 1000),
     }
 
 
-# ── Tool 7: write_merge_redirect ────────────────────────────
+# ── Tool 13: find_common_neighbors ────────────────────────────
 
 @mcp.tool()
-async def write_merge_redirect(
-    survivor_id: str,
-    absorbed_id: str,
-    survivor_updates: dict,
+async def find_common_neighbors(
+    entity_a_id: str,
+    entity_b_id: str,
+    limit: int = 20,
     ctx: Context = None,
 ) -> dict:
-    """Handle KG updates for golden-to-golden merges.
-
-    Migrates relationship triples from absorbed to survivor, updates survivor
-    attributes, deletes absorbed attributes, then creates owl:sameAs redirect.
-    CRITICAL: owl:sameAs must be written LAST to avoid premature inheritance.
+    """Find entities that are direct transaction partners of BOTH given entities.
 
     Args:
-        survivor_id: Golden record ID of the surviving entity.
-        absorbed_id: Golden record ID of the absorbed (merged) entity.
-        survivor_updates: Dict with name_variants and unspsc_codes to add to survivor.
+        entity_a_id: Golden record ID of the first entity.
+        entity_b_id: Golden record ID of the second entity.
+        limit: Maximum results to return (default 20).
 
     Returns:
-        Dict with 'success', 'triples_migrated', 'triples_created', 'redirect_created'.
+        Dict with 'common_neighbors' list, 'count', and entity names.
     """
     app: AppContext = ctx.request_context.lifespan_context
+    start = time.time()
 
-    if not app.graphdb.available:
-        logger.warning(f"GraphDB unavailable — merge redirect deferred for {absorbed_id} -> {survivor_id}")
-        return {"success": False, "fallback_to_changelog": True,
-                "triples_migrated": 0, "redirect_created": False}
+    # Resolve names from Neo4j
+    gr_a = app.neo4j.get_golden_record(entity_a_id)
+    gr_b = app.neo4j.get_golden_record(entity_b_id)
+    name_a = gr_a.get("canonical_name", entity_a_id) if gr_a else entity_a_id
+    name_b = gr_b.get("canonical_name", entity_b_id) if gr_b else entity_b_id
 
-    result = app.graphdb.write_merge_redirect(survivor_id, absorbed_id, survivor_updates)
-    result["success"] = result.get("redirect_created", False)
-    result["fallback_to_changelog"] = False
-    return result
+    if not app.neo4j.available:
+        return {"common_neighbors": [], "count": 0,
+                "entity_a_name": name_a, "entity_b_name": name_b,
+                "error": "Neo4j unavailable",
+                "duration_ms": int((time.time() - start) * 1000)}
+
+    raw = app.neo4j.find_common_neighbors(entity_a_id, entity_b_id, limit=limit)
+    neighbors = []
+    for r in raw:
+        neighbors.append({
+            "id": r.get("id", ""),
+            "name": r.get("name", ""),
+            "naics_code": r.get("naics_code", ""),
+            "rel_to_a": r.get("rel_to_a", ""),
+            "vol_a": float(r.get("vol_a") or 0),
+            "rel_to_b": r.get("rel_to_b", ""),
+            "vol_b": float(r.get("vol_b") or 0),
+        })
+    return {
+        "common_neighbors": neighbors,
+        "count": len(neighbors),
+        "entity_a_name": name_a,
+        "entity_b_name": name_b,
+        "duration_ms": int((time.time() - start) * 1000),
+    }
+
+
+# ── Tool 14: detect_cluster ───────────────────────────────────
+
+@mcp.tool()
+async def detect_cluster(
+    entity_id: str,
+    max_size: int = 20,
+    ctx: Context = None,
+) -> dict:
+    """Discover the business cluster (tightly connected subgroup) around an entity.
+
+    Args:
+        entity_id: Golden record ID of the center entity.
+        max_size: Maximum cluster members to return (default 20).
+
+    Returns:
+        Dict with 'nodes', 'edges', 'density', 'center', 'member_count', and 'top_industries'.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+    start = time.time()
+
+    if not app.neo4j.available:
+        return {"nodes": [], "edges": [], "density": 0.0, "center": entity_id,
+                "member_count": 0, "top_industries": [],
+                "error": "Neo4j unavailable",
+                "duration_ms": int((time.time() - start) * 1000)}
+
+    gr_center = app.neo4j.get_golden_record(entity_id)
+    center_name = gr_center.get("canonical_name", entity_id) if gr_center else entity_id
+
+    raw = app.neo4j.find_cluster(entity_id, max_size=max_size)
+    if not raw:
+        return {"nodes": [], "edges": [], "density": 0.0, "center": center_name,
+                "member_count": 0, "top_industries": [],
+                "duration_ms": int((time.time() - start) * 1000)}
+
+    # Neo4j Entity nodes have all fields — use directly
+    nodes = []
+    for n in raw.get("nodes", []):
+        nodes.append({
+            "id": n.get("id", ""),
+            "name": n.get("name", ""),
+            "naics_code": n.get("naics_code", ""),
+        })
+
+    # Add center node
+    nodes.insert(0, {
+        "id": entity_id, "name": center_name,
+        "naics_code": gr_center.get("naics_code", "") if gr_center else "",
+        "state": gr_center.get("state", "") if gr_center else "",
+        "is_center": True,
+    })
+
+    # Top industries
+    naics_counts = {}
+    for n in nodes:
+        code = n.get("naics_code", "")
+        if code:
+            sector = code[:4] if len(code) >= 4 else code
+            naics_counts[sector] = naics_counts.get(sector, 0) + 1
+    top_industries = sorted(naics_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    return {
+        "nodes": nodes,
+        "edges": raw.get("edges", []),
+        "density": raw.get("density", 0.0),
+        "center": center_name,
+        "member_count": len(nodes),
+        "top_industries": [{"naics": k, "count": v} for k, v in top_industries],
+        "duration_ms": int((time.time() - start) * 1000),
+    }
+
+
+# ── Tool 15: assess_risk_impact ───────────────────────────────
+
+@mcp.tool()
+async def assess_risk_impact(
+    entity_id: str,
+    max_depth: int = 3,
+    ctx: Context = None,
+) -> dict:
+    """Analyze downstream impact if an entity were to disappear from the network.
+
+    Finds all entities that directly or transitively depend on (buy from) this entity.
+
+    Args:
+        entity_id: Golden record ID of the entity to assess.
+        max_depth: Maximum depth to trace dependencies (default 3).
+
+    Returns:
+        Dict with 'affected_entities', 'total_volume_at_risk', 'depth_distribution',
+        and 'concentration_warning'.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+    start = time.time()
+
+    if not app.neo4j.available:
+        return {"affected_entities": [], "affected_count": 0,
+                "total_volume_at_risk": 0, "depth_distribution": {},
+                "error": "Neo4j unavailable",
+                "duration_ms": int((time.time() - start) * 1000)}
+
+    gr_target = app.neo4j.get_golden_record(entity_id)
+    target_name = gr_target.get("canonical_name", entity_id) if gr_target else entity_id
+
+    raw = app.neo4j.assess_impact(entity_id, max_depth=max_depth)
+    if not raw:
+        return {"target_entity": target_name,
+                "affected_entities": [], "affected_count": 0,
+                "total_volume_at_risk": 0, "depth_distribution": {},
+                "duration_ms": int((time.time() - start) * 1000)}
+
+    # Neo4j Entity nodes have all fields — use directly
+    affected = []
+    for a in raw.get("affected", []):
+        affected.append({
+            "id": a.get("id", ""),
+            "name": a.get("name", ""),
+            "depth": a.get("depth", 1),
+            "volume_at_risk": float(a.get("volume_at_risk", 0)),
+        })
+
+    total_vol = raw.get("total_volume_at_risk", 0)
+    depth_dist = raw.get("depth_distribution", {})
+    concentration = _concentration_warning(affected, total_vol)
+
+    return {
+        "target_entity": target_name,
+        "affected_entities": affected,
+        "affected_count": len(affected),
+        "total_volume_at_risk": total_vol,
+        "depth_distribution": depth_dist,
+        "concentration_warning": concentration,
+        "duration_ms": int((time.time() - start) * 1000),
+    }
+
+
+def _concentration_warning(affected: list[dict], total_volume: float) -> str | None:
+    """Generate a concentration warning if a single depth-1 entity holds >50% of volume."""
+    if not affected or total_volume <= 0:
+        return None
+    depth_1 = [a for a in affected if a.get("depth") == 1]
+    for a in depth_1:
+        vol = a.get("volume_at_risk", 0)
+        if vol > total_volume * 0.5:
+            return (f"{a.get('name', a.get('id', '?'))} accounts for "
+                    f"{vol / total_volume * 100:.0f}% of at-risk volume")
+    return None

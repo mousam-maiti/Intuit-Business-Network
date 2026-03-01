@@ -10,7 +10,7 @@
 #   ./demo.sh           # Full reset + pipeline + services
 #
 # Prerequisites:
-#   - Docker: qb-mysql and milvus-standalone running
+#   - Docker: qb-mysql, milvus-standalone, qb-neo4j, qb-redis running
 #   - Flink: installed ($FLINK_HOME set via qb-network-graph-cdc/.flink-env)
 #   - Python venvs: qb-seed-generator, qb-network-graph-be, qb-network-graph-mcp-servers,
 #                   qb-network-graph-conv-agent
@@ -143,6 +143,18 @@ else
     ok "Milvus container running"
 fi
 
+if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-neo4j$"; then
+    fail "Neo4j container (qb-neo4j) not running — required as primary golden record store"
+else
+    ok "Neo4j container running"
+fi
+
+if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-redis$"; then
+    warn "Redis container not running — caching disabled"
+else
+    ok "Redis container running"
+fi
+
 if [ -z "$FLINK_HOME" ] || [ ! -f "$FLINK_HOME/bin/sql-client.sh" ]; then
     fail "FLINK_HOME not set or invalid. Run qb-network-graph-cdc/setup.sh first."
 fi
@@ -200,6 +212,33 @@ fi
 
 
 # ──────────────────────────────────────────────────────────
+step "2b" "Clear Neo4j graph"
+# ──────────────────────────────────────────────────────────
+
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-neo4j$"; then
+    docker exec qb-neo4j cypher-shell -u neo4j -p neo4j_pass \
+        "MATCH (n) DETACH DELETE n" 2>/dev/null \
+        && ok "Neo4j cleared" \
+        || warn "Could not clear Neo4j"
+else
+    info "Neo4j not running — skipping"
+fi
+
+
+# ──────────────────────────────────────────────────────────
+step "2c" "Flush Redis cache"
+# ──────────────────────────────────────────────────────────
+
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-redis$"; then
+    docker exec qb-redis redis-cli FLUSHALL 2>/dev/null \
+        && ok "Redis flushed" \
+        || warn "Could not flush Redis"
+else
+    info "Redis not running — skipping"
+fi
+
+
+# ──────────────────────────────────────────────────────────
 step 3 "Run Liquibase migrations"
 # ──────────────────────────────────────────────────────────
 
@@ -236,7 +275,7 @@ TRUNCATE TABLE vendors;
 TRUNCATE TABLE customers;
 TRUNCATE TABLE companies;
 
--- Network graph tables
+-- Network graph tables (golden records now in Neo4j; these MySQL tables kept for schema compat)
 TRUNCATE TABLE resolution_audit;
 TRUNCATE TABLE pending_resolution;
 TRUNCATE TABLE relationships;
@@ -496,7 +535,7 @@ fi
 
 info "Starting Classifier Orchestrator in stream mode with --reset..."
 info "  Reads: Paimon entity_connections"
-info "  Writes: POST /resolve → golden_records, relationships, resolution_audit"
+info "  Writes: POST /resolve → Neo4j (golden records, relationships) + MySQL (pending_resolution)"
 info "  Log: /tmp/qb-classifier.log"
 
 cd "$ORCH_DIR"
@@ -517,6 +556,18 @@ echo ""
 echo -e "${BOLD}  Service Status${NC}"
 echo -e "${DIM}  ──────────────────────────────────────────────${NC}"
 
+# Docker services
+for svc in "qb-neo4j|Neo4j" "qb-redis|Redis" "milvus-standalone|Milvus"; do
+    name=$(echo "$svc" | cut -d'|' -f1)
+    label=$(echo "$svc" | cut -d'|' -f2)
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"; then
+        echo -e "  ${GREEN}●${NC} docker  ${label}"
+    else
+        echo -e "  ${YELLOW}○${NC} docker  ${label} (optional)"
+    fi
+done
+
+# Application services
 for check in \
     "8080|UI|http://localhost:8080" \
     "8082|Conv Agent|http://localhost:8082" \
@@ -535,18 +586,22 @@ done
 
 echo ""
 
-# Check if golden records exist
-GR_COUNT=$(mysql_exec "SELECT COUNT(*) AS cnt FROM golden_records WHERE status = 'ACTIVE';" 2>/dev/null | tail -1 | tr -d '[:space:]')
-AUDIT_COUNT=$(mysql_exec "SELECT COUNT(*) AS cnt FROM resolution_audit;" 2>/dev/null | tail -1 | tr -d '[:space:]')
+# Check golden records in Neo4j (primary store)
+NEO4J_COUNT=$(docker exec qb-neo4j cypher-shell -u neo4j -p neo4j_pass \
+    "MATCH (n:Entity) WHERE n.status <> 'MERGED' RETURN count(n) AS cnt" --format plain 2>/dev/null | tail -1 | tr -d '[:space:]')
+
+NEO4J_AUDIT=$(docker exec qb-neo4j cypher-shell -u neo4j -p neo4j_pass \
+    "MATCH (a:AuditEntry) RETURN count(a) AS cnt" --format plain 2>/dev/null | tail -1 | tr -d '[:space:]')
+
 PENDING_COUNT=$(mysql_exec "SELECT COUNT(*) AS cnt FROM pending_resolution WHERE status = 'PENDING';" 2>/dev/null | tail -1 | tr -d '[:space:]')
 
 echo -e "${BOLD}  Data Status${NC}"
 echo -e "${DIM}  ──────────────────────────────────────────────${NC}"
-echo -e "  Golden records:     ${GR_COUNT:-0}"
-echo -e "  Audit trail rows:   ${AUDIT_COUNT:-0}"
+echo -e "  Neo4j entities:     ${NEO4J_COUNT:-0}"
+echo -e "  Audit trail entries: ${NEO4J_AUDIT:-0}"
 echo -e "  Pending reviews:    ${PENDING_COUNT:-0}"
 
-if [ "${GR_COUNT:-0}" = "0" ]; then
+if [ "${NEO4J_COUNT:-0}" = "0" ]; then
     warn "No golden records yet — Classifier Orchestrator is still processing"
     info "Monitor: tail -f /tmp/qb-classifier.log"
     info "Recheck: curl http://localhost:8087/api/v1/entities | python3 -m json.tool | head"

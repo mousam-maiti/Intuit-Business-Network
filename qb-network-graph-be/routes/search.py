@@ -11,6 +11,6 @@ def search_entities(
     industry: str = Query(None),
     sortBy: str = Query(None),
 ):
-    mysql = request.app.state.mysql
-    results = mysql.search_entities(q=q, industry=industry, sort_by=sortBy)
+    neo4j = request.app.state.neo4j
+    results = neo4j.search_entities(q=q, industry=industry, sort_by=sortBy)
     return {"data": results, "total": len(results)}

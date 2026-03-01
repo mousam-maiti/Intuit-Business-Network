@@ -51,7 +51,7 @@ class MCPConfig:
 
 @dataclass
 class LLMConfig:
-    model: str = "gemini-3-pro-preview"
+    model: str = "gemini-2.5-pro"
     temperature: float = 0.3
     max_tokens: int = 4096
     timeout_ms: int = 30000

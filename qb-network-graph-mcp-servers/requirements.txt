@@ -21,6 +21,12 @@ mysql-connector-python>=8.3.0
 # Milvus
 pymilvus>=2.4.0
 
+# Neo4j (directed graph traversal)
+neo4j>=5.0.0
+
+# Redis (subgraph cache)
+redis[hiredis]>=5.0.0
+
 # Gemini (embeddings + LLM)
 google-generativeai>=0.7.0
 

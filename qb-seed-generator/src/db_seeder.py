@@ -190,10 +190,10 @@ def seed_mysql(
         _insert_invoice_line_items(cursor, invoice_line_items)
         _insert_payments(cursor, payments)
         conn.commit()
-        print("\n✓ MySQL seeded successfully")
+        print("\n\u2713 MySQL seeded successfully")
     except Exception as e:
         conn.rollback()
-        print(f"\n✗ MySQL seeding failed: {e}")
+        print(f"\n\u2717 MySQL seeding failed: {e}")
         raise
     finally:
         cursor.close()

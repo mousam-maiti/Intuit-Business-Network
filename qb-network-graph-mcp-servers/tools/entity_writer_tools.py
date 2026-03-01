@@ -3,6 +3,10 @@ Entity writer tools — extracted from EntityWriter.
 
 5 tools: merge_into_golden_record, create_golden_record, submit_for_review,
          merge_golden_records, log_decision
+
+Primary store: Neo4j (real-time graph).
+Pending resolution: MySQL (OLTP work queue).
+Paimon gold writes: handled by the classifier orchestrator after /resolve.
 """
 from __future__ import annotations
 import logging
@@ -86,48 +90,58 @@ def _get_txn_count(persona: ClassifiedPersona):
 def _ensure_company_golden_record(app: "AppContext", company_id: str):
     """Create a QB_USER golden record for a company if it doesn't already exist.
 
-    Required for customer relationships where company_id is the FK target.
+    Reads company data from MySQL (source), writes golden record to Neo4j (primary).
     """
     cid = str(company_id)
-    existing = app.mysql.get_golden_record(cid)
+    existing = app.neo4j.get_golden_record(cid)
     if existing:
         return
     company = app.mysql.get_company(cid)
     name = company["company_name"] if company else f"Company {cid}"
+
+    persona = ClassifiedPersona()
+    if company:
+        ein_raw = company.get("ein") or ""
+        ein_clean = ein_raw.replace("-", "").strip() or None
+        persona.identity.normalized_name = name
+        persona.identity.name_first_token = name.split()[0].upper() if name else ""
+        persona.identity.name_tokens = [t.upper() for t in name.split()] if name else []
+        persona.identity.ein_clean = ein_clean
+        persona.identity.phone_digits = (company.get("phone") or "").replace("-", "").replace(" ", "")[-10:] or None
+        persona.identity.email = company.get("email")
+        persona.identity.email_domain = (company.get("email") or "").split("@")[-1] if company.get("email") else None
+
+        persona.location.state = company.get("state") or ""
+        persona.location.city_norm = (company.get("city") or "").upper() or None
+        zip_val = company.get("zip") or ""
+        persona.location.zip5 = zip_val[:5] if len(zip_val) >= 5 else None
+        persona.location.zip3 = zip_val[:3] if len(zip_val) >= 3 else None
+
+        persona.industry.original_category = company.get("industry_category")
+
+    bucket_keys = generate_bucket_keys(persona, app.config.buckets.max_commodity_keywords)
+
     gr = GoldenRecord(
         golden_record_id=cid,
         canonical_name=name,
         name_variants=[name],
-        persona=ClassifiedPersona(),
+        persona=persona,
         source_count=1,
         confidence=1.0,
         status="ACTIVE",
         entity_type="QB_USER",
         source_records=[],
-        bucket_keys=[],
+        bucket_keys=bucket_keys,
     )
-    app.mysql.write_golden_record(gr)
+    app.neo4j.upsert_entity(gr.model_dump())
 
 
-def _gr_to_kg_attrs(gr: GoldenRecord, orphan: ClassifiedPersona) -> dict:
-    name = gr.canonical_name
-    if not name:
-        name = _resolve_canonical_name(orphan)
-    if not name and gr.name_variants:
-        name = gr.name_variants[0]
-
-    return {
-        "canonical_name": name,
-        "entity_type": gr.entity_type,
-        "confidence": gr.confidence,
-        "naics_codes": [gr.persona.industry.naics_code] if gr.persona.industry.naics_code else [],
-        "unspsc_codes": [],
-        "geo_location": (gr.persona.location.city_norm or "").lower(),
-        "name_variants": gr.name_variants,
-        "ein": gr.persona.identity.ein_clean or "",
-        "email": gr.persona.identity.email or "",
-        "phone": gr.persona.identity.phone_digits or "",
-    }
+async def _invalidate_cache(app: "AppContext", *entity_ids: str):
+    """Invalidate Redis cache for affected entities."""
+    if not app.redis.available:
+        return
+    for eid in entity_ids:
+        await app.redis.invalidate_entity(eid)
 
 
 # ── Tool 8: merge_into_golden_record ────────────────────────
@@ -145,7 +159,7 @@ async def merge_into_golden_record(
     """Merge an orphan record into an existing golden record.
 
     Applies survivorship rules (fill-in-the-blanks), updates the golden record
-    in MySQL, syncs to Milvus vectors, and writes KG triples.
+    in Neo4j (primary store), syncs to Milvus vectors.
 
     Args:
         orphan_record_id: Record ID of the orphan being merged.
@@ -161,7 +175,7 @@ async def merge_into_golden_record(
     app: AppContext = ctx.request_context.lifespan_context
     start = time.time()
 
-    gr_data = app.mysql.get_golden_record(golden_record_id)
+    gr_data = app.neo4j.get_golden_record(golden_record_id)
     if not gr_data:
         return {"success": False, "error": f"Golden record {golden_record_id} not found"}
 
@@ -179,30 +193,35 @@ async def merge_into_golden_record(
     gr.bucket_keys = generate_bucket_keys(gr.persona, app.config.buckets.max_commodity_keywords)
     gr.confidence = min(0.99, gr.confidence + 0.05)
 
-    app.mysql.write_golden_record(gr)
+    app.neo4j.upsert_entity(gr.model_dump())
 
     # Relationship edge: vendor = company→entity, customer = entity→company
+    relationship = None
     if company_id is not None:
         if record_type == "customer":
             _ensure_company_golden_record(app, company_id)
             src, tgt = gr.golden_record_id, str(company_id)
         else:
             src, tgt = str(company_id), gr.golden_record_id
-        edge_id = app.mysql.generate_id("E")
-        app.mysql.write_relationship(
-            edge_id=edge_id,
-            source_id=src,
-            target_id=tgt,
-            volume=_get_volume(persona),
-            count=_get_txn_count(persona),
+        edge_id = app.neo4j.generate_id("E")
+        volume = _get_volume(persona)
+        count = _get_txn_count(persona)
+        rel_type = "SELLS_TO" if record_type == "customer" else "BUYS_FROM"
+        app.neo4j.create_relationship(
+            source_id=src, target_id=tgt, rel_type=rel_type,
+            properties={"volume": volume, "count": count, "edge_id": edge_id},
         )
+        relationship = {
+            "edge_id": edge_id, "source_entity_id": src, "target_entity_id": tgt,
+            "rel_type": rel_type, "transaction_volume": volume, "transaction_count": count,
+        }
 
     milvus_result = app.milvus.upsert_golden_record(gr.model_dump())
 
-    kg_result = {}
-    if app.graphdb.available:
-        kg_result = {"success": app.graphdb.create_entity_triples(
-            gr.golden_record_id, _gr_to_kg_attrs(gr, persona)) > 0}
+    invalidate_ids = [gr.golden_record_id]
+    if company_id is not None:
+        invalidate_ids.extend([src, tgt])
+    await _invalidate_cache(app, *invalidate_ids)
 
     elapsed = int((time.time() - start) * 1000)
     return {
@@ -210,8 +229,9 @@ async def merge_into_golden_record(
         "golden_record_id": gr.golden_record_id,
         "golden_record_before": before_snapshot,
         "golden_record_after": gr.model_dump(),
-        "sync_status": {"mysql": True, "milvus": milvus_result.get("success", False),
-                        "kg_store": kg_result.get("success", False)},
+        "relationship": relationship,
+        "sync_status": {"neo4j": True, "milvus": milvus_result.get("success", False),
+                        "redis_invalidated": app.redis.available},
         "duration_ms": elapsed,
     }
 
@@ -229,8 +249,8 @@ async def create_golden_record(
 ) -> dict:
     """Create a new golden record from an unmatched orphan.
 
-    Generates a new golden record ID, builds bucket keys, persists to MySQL,
-    syncs vectors to Milvus, and writes KG triples.
+    Generates a new golden record ID, builds bucket keys, persists to Neo4j
+    (primary store), syncs vectors to Milvus.
 
     Args:
         orphan_record_id: Record ID of the orphan.
@@ -246,7 +266,7 @@ async def create_golden_record(
     start = time.time()
 
     persona = _to_classified_persona(orphan_persona)
-    gr_id = app.mysql.generate_id("G")
+    gr_id = app.neo4j.generate_id("G")
     name = _resolve_canonical_name(persona)
 
     gr = GoldenRecord(
@@ -262,38 +282,43 @@ async def create_golden_record(
         bucket_keys=generate_bucket_keys(persona, app.config.buckets.max_commodity_keywords),
     )
 
-    app.mysql.write_golden_record(gr)
+    app.neo4j.upsert_entity(gr.model_dump())
 
     # Relationship edge: vendor = company→entity, customer = entity→company
+    relationship = None
     if company_id is not None:
         if record_type == "customer":
             _ensure_company_golden_record(app, company_id)
             src, tgt = gr_id, str(company_id)
         else:
             src, tgt = str(company_id), gr_id
-        edge_id = app.mysql.generate_id("E")
-        app.mysql.write_relationship(
-            edge_id=edge_id,
-            source_id=src,
-            target_id=tgt,
-            volume=_get_volume(persona),
-            count=_get_txn_count(persona),
+        edge_id = app.neo4j.generate_id("E")
+        volume = _get_volume(persona)
+        count = _get_txn_count(persona)
+        rel_type = "SELLS_TO" if record_type == "customer" else "BUYS_FROM"
+        app.neo4j.create_relationship(
+            source_id=src, target_id=tgt, rel_type=rel_type,
+            properties={"volume": volume, "count": count, "edge_id": edge_id},
         )
+        relationship = {
+            "edge_id": edge_id, "source_entity_id": src, "target_entity_id": tgt,
+            "rel_type": rel_type, "transaction_volume": volume, "transaction_count": count,
+        }
 
     milvus_result = app.milvus.upsert_golden_record(gr.model_dump())
 
-    kg_result = {}
-    if app.graphdb.available:
-        kg_result = {"success": app.graphdb.create_entity_triples(
-            gr.golden_record_id, _gr_to_kg_attrs(gr, persona)) > 0}
+    if company_id is not None:
+        await _invalidate_cache(app, str(company_id))
 
     elapsed = int((time.time() - start) * 1000)
     return {
         "success": True,
         "golden_record_id": gr_id,
+        "golden_record_after": gr.model_dump(),
         "bucket_keys": gr.bucket_keys,
-        "sync_status": {"mysql": True, "milvus": milvus_result.get("success", False),
-                        "kg_store": kg_result.get("success", False)},
+        "relationship": relationship,
+        "sync_status": {"neo4j": True, "milvus": milvus_result.get("success", False),
+                        "redis_invalidated": app.redis.available},
         "duration_ms": elapsed,
     }
 
@@ -312,8 +337,8 @@ async def submit_for_review(
 ) -> dict:
     """Submit an ambiguous match to the human review queue.
 
-    Creates a provisional golden record for the orphan and a pending resolution
-    entry linking it to the candidate, both in a single MySQL transaction.
+    Creates a provisional golden record in Neo4j and a pending resolution
+    entry in MySQL (OLTP work queue).
 
     Args:
         orphan_record_id: Record ID of the orphan.
@@ -330,7 +355,7 @@ async def submit_for_review(
     start = time.time()
 
     persona = _to_classified_persona(orphan_persona)
-    prov_id = app.mysql.generate_id("G")
+    prov_id = app.neo4j.generate_id("G")
     name = _resolve_canonical_name(persona)
     prov_gr = GoldenRecord(
         golden_record_id=prov_id,
@@ -345,6 +370,10 @@ async def submit_for_review(
         bucket_keys=generate_bucket_keys(persona, app.config.buckets.max_commodity_keywords),
     )
 
+    # Write provisional GR to Neo4j (primary)
+    app.neo4j.upsert_entity(prov_gr.model_dump())
+
+    # Write pending resolution to MySQL (OLTP work queue)
     match_id = f"PR-{uuid.uuid4().hex[:8]}"
     pending = PendingResolution(
         match_id=match_id,
@@ -356,33 +385,44 @@ async def submit_for_review(
         key_uncertainty=review_reasoning.get("key_uncertainty", ""),
         trigger_type=review_reasoning.get("trigger_type", "AI_AGENT"),
     )
-
-    app.mysql.write_golden_record_and_pending(prov_gr, pending)
+    app.mysql.write_pending_resolution(pending)
 
     # Relationship edge: vendor = company→entity, customer = entity→company
+    relationship = None
     if company_id is not None:
         if record_type == "customer":
             _ensure_company_golden_record(app, company_id)
             src, tgt = prov_id, str(company_id)
         else:
             src, tgt = str(company_id), prov_id
-        edge_id = app.mysql.generate_id("E")
-        app.mysql.write_relationship(
-            edge_id=edge_id,
-            source_id=src,
-            target_id=tgt,
-            volume=_get_volume(persona),
-            count=_get_txn_count(persona),
+        edge_id = app.neo4j.generate_id("E")
+        volume = _get_volume(persona)
+        count = _get_txn_count(persona)
+        rel_type = "SELLS_TO" if record_type == "customer" else "BUYS_FROM"
+        app.neo4j.create_relationship(
+            source_id=src, target_id=tgt, rel_type=rel_type,
+            properties={"volume": volume, "count": count, "edge_id": edge_id},
         )
+        relationship = {
+            "edge_id": edge_id, "source_entity_id": src, "target_entity_id": tgt,
+            "rel_type": rel_type, "transaction_volume": volume, "transaction_count": count,
+        }
 
     milvus_result = app.milvus.upsert_golden_record(prov_gr.model_dump())
+
+    if company_id is not None:
+        await _invalidate_cache(app, str(company_id))
 
     elapsed = int((time.time() - start) * 1000)
     return {
         "success": True,
         "provisional_golden_record_id": prov_id,
         "pending_match_id": match_id,
-        "sync_status": {"mysql": True, "milvus": milvus_result.get("success", False)},
+        "golden_record_after": prov_gr.model_dump(),
+        "relationship": relationship,
+        "sync_status": {"neo4j": True, "mysql_pending": True,
+                        "milvus": milvus_result.get("success", False),
+                        "redis_invalidated": app.redis.available},
         "duration_ms": elapsed,
     }
 
@@ -398,8 +438,8 @@ async def merge_golden_records(
 ) -> dict:
     """Merge two existing golden records (re-evaluation trigger).
 
-    Uses MySQL transactional merge for atomicity. The record with more source
-    records becomes the survivor. Updates Milvus and KG accordingly.
+    Uses Neo4j multi-statement transaction: upsert survivor, merge edges,
+    mark absorbed as MERGED, write audit. Milvus updated accordingly.
 
     Args:
         survivor_id: Preferred survivor golden record ID.
@@ -412,8 +452,8 @@ async def merge_golden_records(
     app: AppContext = ctx.request_context.lifespan_context
     start = time.time()
 
-    surv_data = app.mysql.get_golden_record(survivor_id)
-    abso_data = app.mysql.get_golden_record(absorbed_id)
+    surv_data = app.neo4j.get_golden_record(survivor_id)
+    abso_data = app.neo4j.get_golden_record(absorbed_id)
     if not surv_data or not abso_data:
         return {"success": False, "error": "Golden record not found"}
 
@@ -438,43 +478,37 @@ async def merge_golden_records(
     survivor.bucket_keys = generate_bucket_keys(
         survivor.persona, app.config.buckets.max_commodity_keywords)
 
-    audit = AuditRecord(
-        audit_id=f"A-{uuid.uuid4().hex[:8]}",
-        event_id=f"merge-{survivor.golden_record_id}-{absorbed.golden_record_id}",
-        record_id=absorbed.golden_record_id,
-        perspective="GLOBAL",
-        decision="MERGE",
-        trigger_type=merge_reasoning.get("trigger", "RE_EVALUATION"),
-        target_golden_id=survivor.golden_record_id,
-        confidence=merge_reasoning.get("confidence", 0.0),
-        dimension_scores=merge_reasoning.get("dimension_scores", {}),
-        reasoning=merge_reasoning.get("reasoning", ""),
-        key_factors=merge_reasoning.get("key_factors", []),
-        candidates_evaluated=1,
-        llm_calls=merge_reasoning.get("llm_calls", 0),
-        embedding_calls=merge_reasoning.get("embedding_calls", 0),
-        total_duration_ms=0,
-        evaluation_chain=[],
-        golden_record_before=surv_before,
-        golden_record_after=survivor.model_dump(),
-    )
+    audit_dict = {
+        "audit_id": f"A-{uuid.uuid4().hex[:8]}",
+        "event_id": f"merge-{survivor.golden_record_id}-{absorbed.golden_record_id}",
+        "record_id": absorbed.golden_record_id,
+        "perspective": "GLOBAL",
+        "decision": "MERGE",
+        "trigger_type": merge_reasoning.get("trigger", "RE_EVALUATION"),
+        "target_golden_id": survivor.golden_record_id,
+        "absorbed_golden_id": absorbed.golden_record_id,
+        "confidence": merge_reasoning.get("confidence", 0.0),
+        "dimension_scores": merge_reasoning.get("dimension_scores", {}),
+        "reasoning": merge_reasoning.get("reasoning", ""),
+        "key_factors": merge_reasoning.get("key_factors", []),
+        "candidates_evaluated": 1,
+        "llm_calls": merge_reasoning.get("llm_calls", 0),
+        "embedding_calls": merge_reasoning.get("embedding_calls", 0),
+        "total_duration_ms": 0,
+        "evaluation_chain": [],
+        "golden_record_before": surv_before,
+        "golden_record_after": survivor.model_dump(),
+    }
 
-    success = app.mysql.transactional_merge(
-        survivor=survivor, absorbed_id=absorbed.golden_record_id, audit=audit)
-
-    if not success:
-        return {"success": False, "error": "MySQL transaction failed — rolled back"}
+    # Neo4j multi-statement transaction: upsert survivor + merge edges + audit
+    app.neo4j.upsert_entity(survivor.model_dump())
+    app.neo4j.merge_entities(survivor.golden_record_id, absorbed.golden_record_id)
+    app.neo4j.write_audit(audit_dict)
 
     milvus_result = app.milvus.upsert_golden_record(survivor.model_dump())
     app.milvus.delete_golden_record(absorbed.golden_record_id)
 
-    kg_result = {}
-    if app.graphdb.available:
-        new_variants = list(set(absorbed.name_variants) - set(surv_data.get("name_variants", [])))
-        new_unspscs = list(set(absorbed.persona.commodity.top_keywords) - s_kw)
-        kg_result = app.graphdb.write_merge_redirect(
-            survivor.golden_record_id, absorbed.golden_record_id,
-            {"name_variants": new_variants, "unspsc_codes": new_unspscs})
+    await _invalidate_cache(app, survivor.golden_record_id, absorbed.golden_record_id)
 
     elapsed = int((time.time() - start) * 1000)
     return {
@@ -483,8 +517,10 @@ async def merge_golden_records(
         "absorbed_id": absorbed.golden_record_id,
         "survivor_before": surv_before,
         "survivor_after": survivor.model_dump(),
-        "sync_status": {"mysql": True, "milvus": milvus_result.get("success", False),
-                        "kg_store": kg_result.get("success", False)},
+        "golden_record_after": survivor.model_dump(),
+        "audit_record": audit_dict,
+        "sync_status": {"neo4j": True, "milvus": milvus_result.get("success", False),
+                        "redis_invalidated": app.redis.available},
         "duration_ms": elapsed,
     }
 
@@ -509,6 +545,8 @@ async def log_decision(
 
     Every agent invocation should call this to record the decision,
     scores, reasoning, and metadata for compliance and debugging.
+    Writes to Neo4j AuditEntry nodes (real-time). Paimon archive
+    is written by the classifier orchestrator.
 
     Args:
         event_id: Unique event ID for this resolution.
@@ -527,22 +565,22 @@ async def log_decision(
     """
     app: AppContext = ctx.request_context.lifespan_context
 
-    audit = AuditRecord(
-        audit_id=f"A-{uuid.uuid4().hex[:8]}",
-        event_id=event_id,
-        record_id=record_id,
-        perspective="GLOBAL",
-        decision=decision,
-        trigger_type=agent_metadata.get("trigger_type", "AI_AGENT"),
-        target_golden_id=target_golden_record_id,
-        confidence=confidence,
-        dimension_scores=dimension_scores,
-        reasoning=reasoning,
-        key_factors=key_factors,
-        candidates_evaluated=agent_metadata.get("candidates_evaluated", 0),
-        llm_calls=agent_metadata.get("llm_calls", 0),
-        embedding_calls=agent_metadata.get("embedding_calls", 0),
-        total_duration_ms=agent_metadata.get("total_duration_ms", 0),
-        evaluation_chain=evaluation_chain,
-    )
-    return app.mysql.write_audit(audit)
+    audit_dict = {
+        "audit_id": f"A-{uuid.uuid4().hex[:8]}",
+        "event_id": event_id,
+        "record_id": record_id,
+        "perspective": "GLOBAL",
+        "decision": decision,
+        "trigger_type": agent_metadata.get("trigger_type", "AI_AGENT"),
+        "target_golden_id": target_golden_record_id,
+        "confidence": confidence,
+        "dimension_scores": dimension_scores,
+        "reasoning": reasoning,
+        "key_factors": key_factors,
+        "candidates_evaluated": agent_metadata.get("candidates_evaluated", 0),
+        "llm_calls": agent_metadata.get("llm_calls", 0),
+        "embedding_calls": agent_metadata.get("embedding_calls", 0),
+        "total_duration_ms": agent_metadata.get("total_duration_ms", 0),
+        "evaluation_chain": evaluation_chain,
+    }
+    return app.neo4j.write_audit(audit_dict)

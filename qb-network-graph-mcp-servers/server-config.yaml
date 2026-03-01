@@ -34,7 +34,7 @@ buckets:
 # LLM configuration (Gemini)
 llm:
   provider: gemini
-  model: gemini-2.5-flash
+  model: gemini-2.5-pro
   ambiguous_model: gemini-2.5-pro
   max_tokens: 1024
   temperature: 0.0
@@ -52,16 +52,6 @@ embedding:
   fallback_model: all-MiniLM-L6-v2
   fallback_dimension: 384
 
-# Knowledge Graph Store (GraphDB Free)
-knowledge_graph:
-  sparql_endpoint: http://localhost:7200/repositories/qb-ontology
-  update_endpoint: http://localhost:7200/repositories/qb-ontology/statements
-  timeout_ms: 2000
-  max_concurrent_queries: 2
-  direct_write: true
-  fallback_to_changelog: true
-  t_box_cache_ttl_hours: 24
-
 # MySQL (Source of Truth)
 mysql:
   host: localhost
@@ -70,6 +60,22 @@ mysql:
   password: qb_admin_pass
   database: quickbooks
   pool_size: 5
+
+# Neo4j (Directed Graph Traversal)
+neo4j:
+  uri: bolt://localhost:7687
+  user: neo4j
+  password: neo4j_pass
+  database: neo4j
+  max_pool_size: 50
+
+# Redis (Subgraph Cache)
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  default_ttl: 3600
 
 # Milvus (Vector Search)
 milvus:

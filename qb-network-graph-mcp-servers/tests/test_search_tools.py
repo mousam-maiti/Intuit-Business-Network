@@ -1,4 +1,4 @@
-"""Tests for search_tools — 6 conversational search tools."""
+"""Tests for search_tools — conversational search tools."""
 import pytest
 from unittest.mock import MagicMock
 from tools.search_tools import (
@@ -14,12 +14,12 @@ def _make_ctx(app_context):
 
 
 @pytest.mark.asyncio
-async def test_search_entities_basic(app_context, seeded_mysql):
+async def test_search_entities_basic(app_context, seeded_neo4j):
     """search_entities should return results from seeded data."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
 
     # Seed Milvus mock with the golden record
-    gr_data = seeded_mysql.get_golden_record("G-test0001")
+    gr_data = seeded_neo4j.get_golden_record("G-test0001")
     app_context.milvus.upsert_golden_record(gr_data)
 
     ctx = _make_ctx(app_context)
@@ -36,10 +36,10 @@ async def test_search_entities_basic(app_context, seeded_mysql):
 
 
 @pytest.mark.asyncio
-async def test_search_entities_with_filters(app_context, seeded_mysql):
+async def test_search_entities_with_filters(app_context, seeded_neo4j):
     """search_entities with city filter should filter results."""
-    app_context.mysql = seeded_mysql
-    gr_data = seeded_mysql.get_golden_record("G-test0001")
+    app_context.neo4j = seeded_neo4j
+    gr_data = seeded_neo4j.get_golden_record("G-test0001")
     app_context.milvus.upsert_golden_record(gr_data)
 
     ctx = _make_ctx(app_context)
@@ -52,8 +52,7 @@ async def test_search_entities_with_filters(app_context, seeded_mysql):
         ctx=ctx,
     )
 
-    # The mock Milvus returns all records, but city post-filter should exclude
-    # (depends on whether mock golden record has city set)
+    # The mock Neo4j should filter out non-matching cities
     assert "results" in result
 
 
@@ -73,9 +72,9 @@ async def test_search_entities_empty(app_context):
 
 
 @pytest.mark.asyncio
-async def test_describe_entity(app_context, seeded_mysql):
+async def test_describe_entity(app_context, seeded_neo4j):
     """describe_entity should return full profile."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     result = await describe_entity(
@@ -106,8 +105,10 @@ async def test_describe_entity_not_found(app_context):
 
 
 @pytest.mark.asyncio
-async def test_query_network_unavailable(app_context):
-    """query_network should return error when GraphDB is unavailable."""
+async def test_query_network_neo4j_unavailable(app_context):
+    """query_network should return error when Neo4j is unavailable."""
+    # Override mock mode to simulate unavailable
+    app_context.neo4j._using_mock = False
     ctx = _make_ctx(app_context)
 
     result = await query_network(
@@ -121,9 +122,9 @@ async def test_query_network_unavailable(app_context):
 
 
 @pytest.mark.asyncio
-async def test_aggregate_stats(app_context, seeded_mysql):
+async def test_aggregate_stats(app_context, seeded_neo4j):
     """aggregate_stats should return grouped counts."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     result = await aggregate_stats(
@@ -140,9 +141,9 @@ async def test_aggregate_stats(app_context, seeded_mysql):
 
 
 @pytest.mark.asyncio
-async def test_aggregate_stats_confidence_range(app_context, seeded_mysql):
+async def test_aggregate_stats_confidence_range(app_context, seeded_neo4j):
     """aggregate_stats with confidence_range grouping."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     result = await aggregate_stats(
@@ -156,7 +157,7 @@ async def test_aggregate_stats_confidence_range(app_context, seeded_mysql):
 
 @pytest.mark.asyncio
 async def test_aggregate_stats_invalid_group(app_context):
-    """aggregate_stats with invalid group_by should return empty or error."""
+    """aggregate_stats with invalid group_by should return error."""
     ctx = _make_ctx(app_context)
 
     result = await aggregate_stats(
@@ -164,24 +165,23 @@ async def test_aggregate_stats_invalid_group(app_context):
         ctx=ctx,
     )
 
-    # In mock mode, invalid group_by returns empty groups (no SQL validation)
-    # In live mode, it returns an error dict
     assert "error" in result or result["groups"] == []
 
 
 @pytest.mark.asyncio
-async def test_search_by_relationship_unavailable(app_context):
-    """search_by_relationship should return error when GraphDB unavailable."""
+async def test_search_by_relationship_neo4j_unavailable(app_context):
+    """search_by_relationship should return error when Neo4j unavailable."""
+    app_context.neo4j._using_mock = False
     ctx = _make_ctx(app_context)
 
     result = await search_by_relationship(
         entity_id="G-test0001",
-        relationship_type="transactsWith",
+        relationship_type="BUYS_FROM",
         ctx=ctx,
     )
 
-    assert "error" in result
     assert result["related_entities"] == []
+    assert "error" in result
 
 
 @pytest.mark.asyncio
@@ -214,22 +214,20 @@ async def test_get_merge_history_empty(app_context):
 
 
 @pytest.mark.asyncio
-async def test_get_merge_history_with_records(app_context, seeded_mysql):
-    """get_merge_history after logging a decision should return it."""
-    app_context.mysql = seeded_mysql
+async def test_get_merge_history_with_records(app_context, seeded_neo4j):
+    """get_merge_history after logging an audit should return it."""
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
-    # Log a decision first
-    from models.audit import AuditRecord
-    audit = AuditRecord(
-        audit_id="A-test0001",
-        event_id="EVT-001",
-        record_id="R-001",
-        decision="MERGE",
-        target_golden_id="G-test0001",
-        confidence=0.92,
-    )
-    seeded_mysql.write_audit(audit)
+    # Log an audit entry directly to Neo4j mock
+    seeded_neo4j.write_audit({
+        "audit_id": "A-test0001",
+        "event_id": "EVT-001",
+        "record_id": "R-001",
+        "decision": "MERGE",
+        "target_golden_id": "G-test0001",
+        "confidence": 0.92,
+    })
 
     result = await get_merge_history(
         entity_id="G-test0001",

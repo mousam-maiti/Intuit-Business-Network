@@ -12,9 +12,9 @@ def _make_ctx(app_context):
 
 
 @pytest.mark.asyncio
-async def test_find_candidates_returns_matches(app_context, seeded_mysql, sample_persona):
+async def test_find_candidates_returns_matches(app_context, seeded_neo4j, sample_persona):
     """find_candidates should return the seeded golden record when bucket keys overlap."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     result = await find_candidates(

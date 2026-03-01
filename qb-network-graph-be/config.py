@@ -50,6 +50,15 @@ class MySQLConfig:
 
 
 @dataclass
+class Neo4jConfig:
+    uri: str = "bolt://localhost:7687"
+    user: str = "neo4j"
+    password: str = "neo4j_pass"
+    database: str = "neo4j"
+    max_pool_size: int = 10
+
+
+@dataclass
 class EntityAgentConfig:
     url: str = "http://localhost:8085"
     timeout: int = 30
@@ -59,6 +68,7 @@ class EntityAgentConfig:
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
+    neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     entity_agent: EntityAgentConfig = field(default_factory=EntityAgentConfig)
 
 
@@ -81,6 +91,7 @@ def load_config(path: str | None = None) -> AppConfig:
     cfg = AppConfig(
         server=_build(ServerConfig, raw.get("server")),
         mysql=_build(MySQLConfig, raw.get("mysql")),
+        neo4j=_build(Neo4jConfig, raw.get("neo4j")),
         entity_agent=_build(EntityAgentConfig, raw.get("entity_agent")),
     )
 
@@ -94,6 +105,12 @@ def load_config(path: str | None = None) -> AppConfig:
     cfg.mysql.password = _env("MYSQL_PASSWORD", cfg.mysql.password)
     cfg.mysql.database = _env("MYSQL_DATABASE", cfg.mysql.database)
     cfg.mysql.pool_size = _env("MYSQL_POOL_SIZE", cfg.mysql.pool_size, int)
+
+    cfg.neo4j.uri = _env("NEO4J_URI", cfg.neo4j.uri)
+    cfg.neo4j.user = _env("NEO4J_USER", cfg.neo4j.user)
+    cfg.neo4j.password = _env("NEO4J_PASSWORD", cfg.neo4j.password)
+    cfg.neo4j.database = _env("NEO4J_DATABASE", cfg.neo4j.database)
+    cfg.neo4j.max_pool_size = _env("NEO4J_POOL_SIZE", cfg.neo4j.max_pool_size, int)
 
     cfg.entity_agent.url = _env("ENTITY_AGENT_URL", cfg.entity_agent.url)
     cfg.entity_agent.timeout = _env("ENTITY_AGENT_TIMEOUT", cfg.entity_agent.timeout, int)

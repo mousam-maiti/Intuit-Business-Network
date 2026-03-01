@@ -25,21 +25,23 @@ function DashboardWrapper() {
 }
 
 function NetworkWrapper() {
-  const { selectedEntity, setSelectedEntity, goTo } = useOutletContext();
+  const { selectedEntity, setSelectedEntity, goTo, networkEntities, networkRelationships } = useOutletContext();
   return (
     <LazyWrap>
       <NetworkPage
         selectedEntity={selectedEntity}
         onSelect={setSelectedEntity}
         onOpenAI={() => goTo('assist', selectedEntity)}
+        networkEntities={networkEntities}
+        networkRelationships={networkRelationships}
       />
     </LazyWrap>
   );
 }
 
 function SearchWrapper() {
-  const { goTo } = useOutletContext();
-  return <LazyWrap><SearchPage onNavigate={goTo} /></LazyWrap>;
+  const { goTo, networkEntities, networkRelationships } = useOutletContext();
+  return <LazyWrap><SearchPage onNavigate={goTo} networkEntities={networkEntities} networkRelationships={networkRelationships} /></LazyWrap>;
 }
 
 function ReviewWrapper() {

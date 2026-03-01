@@ -15,7 +15,7 @@ def _make_ctx(app_context):
 
 @pytest.mark.asyncio
 async def test_create_golden_record(app_context, sample_persona):
-    """create_golden_record should create a new record in mock MySQL."""
+    """create_golden_record should create a new record in Neo4j mock."""
     ctx = _make_ctx(app_context)
 
     result = await create_golden_record(
@@ -29,16 +29,16 @@ async def test_create_golden_record(app_context, sample_persona):
     assert result["golden_record_id"].startswith("G-")
     assert len(result["bucket_keys"]) > 0
 
-    # Verify in mock MySQL
-    gr_data = app_context.mysql.get_golden_record(result["golden_record_id"])
+    # Verify in Neo4j mock
+    gr_data = app_context.neo4j.get_golden_record(result["golden_record_id"])
     assert gr_data is not None
     assert gr_data["canonical_name"] == "Bob's Plumbing LLC"
 
 
 @pytest.mark.asyncio
-async def test_merge_into_golden_record(app_context, seeded_mysql, sample_persona):
+async def test_merge_into_golden_record(app_context, seeded_neo4j, sample_persona):
     """merge_into_golden_record should update existing GR."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     # Create a slightly different orphan
@@ -57,7 +57,7 @@ async def test_merge_into_golden_record(app_context, seeded_mysql, sample_person
     assert result["golden_record_id"] == "G-test0001"
 
     # Verify updated
-    gr_data = app_context.mysql.get_golden_record("G-test0001")
+    gr_data = app_context.neo4j.get_golden_record("G-test0001")
     assert gr_data["source_count"] == 4  # was 3, now +1
 
 
@@ -79,9 +79,9 @@ async def test_merge_into_nonexistent(app_context, sample_persona):
 
 
 @pytest.mark.asyncio
-async def test_submit_for_review(app_context, seeded_mysql, sample_persona):
+async def test_submit_for_review(app_context, seeded_neo4j, sample_persona):
     """submit_for_review should create provisional GR + pending resolution."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     result = await submit_for_review(
@@ -98,9 +98,9 @@ async def test_submit_for_review(app_context, seeded_mysql, sample_persona):
 
 
 @pytest.mark.asyncio
-async def test_merge_golden_records(app_context, seeded_mysql, sample_persona):
+async def test_merge_golden_records(app_context, seeded_neo4j, sample_persona):
     """merge_golden_records should merge two existing GRs."""
-    app_context.mysql = seeded_mysql
+    app_context.neo4j = seeded_neo4j
     ctx = _make_ctx(app_context)
 
     # Create a second golden record to merge
@@ -115,7 +115,7 @@ async def test_merge_golden_records(app_context, seeded_mysql, sample_persona):
         source_count=1,
         source_records=["R-999"],
     )
-    seeded_mysql.write_golden_record(gr2)
+    seeded_neo4j.upsert_entity(gr2.model_dump())
 
     result = await merge_golden_records(
         survivor_id="G-test0001",
@@ -130,7 +130,7 @@ async def test_merge_golden_records(app_context, seeded_mysql, sample_persona):
 
 @pytest.mark.asyncio
 async def test_log_decision(app_context):
-    """log_decision should write an audit record."""
+    """log_decision should write an audit record to Neo4j."""
     ctx = _make_ctx(app_context)
 
     audit_id = await log_decision(
@@ -148,4 +148,4 @@ async def test_log_decision(app_context):
     )
 
     assert audit_id.startswith("A-")
-    assert len(app_context.mysql._mock_audit) == 1
+    assert len(app_context.neo4j._mock_audit) == 1

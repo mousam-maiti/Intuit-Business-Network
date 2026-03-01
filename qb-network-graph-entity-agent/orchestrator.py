@@ -199,7 +199,13 @@ class Orchestrator:
                 cm.similarity = similarity
 
                 # Combine deterministic + embedding scores
-                combined = (cm.comparison.composite * 0.6) + (similarity.composite_similarity * 0.4)
+                # Dampen embedding influence when identity is weak — industry
+                # embeddings cluster same-sector businesses, confirming "same
+                # industry" not "same entity".
+                if cm.comparison.identity.score < 0.55:
+                    combined = (cm.comparison.composite * 0.85) + (similarity.composite_similarity * 0.15)
+                else:
+                    combined = (cm.comparison.composite * 0.6) + (similarity.composite_similarity * 0.4)
                 cm.combined_score = round(combined, 4)
 
                 if combined > self._cfg.thresholds.auto_merge:

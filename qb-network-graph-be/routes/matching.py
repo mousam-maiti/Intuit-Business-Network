@@ -25,8 +25,8 @@ def resolve_match(request: Request, match_id: str, body: ResolveRequest):
 
 @router.post("/matching/resolve")
 def resolve_adhoc(request: Request, body: AdHocResolveRequest):
-    mysql = request.app.state.mysql
-    result = mysql.resolve_adhoc(
+    neo4j = request.app.state.neo4j
+    result = neo4j.resolve_adhoc(
         name=body.name, ein=body.ein,
         city=body.city, state=body.state,
         industry=body.industry,

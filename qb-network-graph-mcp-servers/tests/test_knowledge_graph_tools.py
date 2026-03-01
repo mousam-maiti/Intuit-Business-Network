@@ -1,10 +1,8 @@
-"""Tests for knowledge_graph_tools — query_ontology, check_shared_context, etc."""
+"""Tests for knowledge_graph_tools — query_ontology, check_shared_context, batch_industry_filter."""
 import pytest
 from unittest.mock import MagicMock
 from tools.knowledge_graph_tools import (
-    query_ontology, check_shared_context,
-    write_entity_triples, write_merge_redirect,
-    _fallback_ontology,
+    query_ontology, check_shared_context, batch_industry_filter,
 )
 
 
@@ -14,48 +12,130 @@ def _make_ctx(app_context):
     return ctx
 
 
-class TestFallbackOntology:
-    """Test the conservative fallback when GraphDB is unavailable."""
+class TestQueryOntologyIndustryRelation:
+    """Test NAICS ontology queries (pure Python + Neo4j/static fallback)."""
 
-    def test_same_subsector(self):
-        result = _fallback_ontology("238220", "238210")
+    @pytest.mark.asyncio
+    async def test_same_subsector(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="INDUSTRY_RELATION",
+            code_a="238220",
+            code_b="238210",
+            ctx=ctx,
+        )
+        assert result["related"] is True
+        assert result["relationship_type"] == "SIBLING"
+        assert result["lowest_common_ancestor"] == "2382"
+
+    @pytest.mark.asyncio
+    async def test_same_sector(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="INDUSTRY_RELATION",
+            code_a="238220",
+            code_b="236220",
+            ctx=ctx,
+        )
+        assert result["related"] is True
+        assert result["relationship_type"] == "ANCESTOR"
+        assert result["lowest_common_ancestor"] == "23"
+
+    @pytest.mark.asyncio
+    async def test_same_code(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="INDUSTRY_RELATION",
+            code_a="238220",
+            code_b="238220",
+            ctx=ctx,
+        )
+        assert result["related"] is True
+        assert result["relationship_type"] == "SAME"
+        assert result["semantic_distance"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_different_sectors(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="INDUSTRY_RELATION",
+            code_a="238220",
+            code_b="541511",
+            ctx=ctx,
+        )
+        assert result["related"] is False
+        assert result["semantic_distance"] >= 0.7
+
+
+class TestQueryOntologyCommodity:
+    """Test commodity code relations."""
+
+    @pytest.mark.asyncio
+    async def test_same_commodity(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="COMMODITY_RELATION",
+            code_a="301516",
+            code_b="301516",
+            ctx=ctx,
+        )
+        assert result["related"] is True
+        assert result["relationship_type"] == "SAME"
+
+    @pytest.mark.asyncio
+    async def test_sibling_commodity(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="COMMODITY_RELATION",
+            code_a="301516",
+            code_b="301518",
+            ctx=ctx,
+        )
         assert result["related"] is True
         assert result["relationship_type"] == "SIBLING"
 
-    def test_same_sector(self):
-        result = _fallback_ontology("238220", "236220")
+    @pytest.mark.asyncio
+    async def test_unrelated_commodity(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="COMMODITY_RELATION",
+            code_a="301516",
+            code_b="721110",
+            ctx=ctx,
+        )
+        assert result["related"] is False
+
+
+class TestQueryOntologyGeo:
+    """Test geo containment queries."""
+
+    @pytest.mark.asyncio
+    async def test_same_geo(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="GEO_CONTAINMENT",
+            code_a="TX",
+            code_b="TX",
+            ctx=ctx,
+        )
         assert result["related"] is True
-        assert result["relationship_type"] == "ANCESTOR"
+        assert result["relationship_type"] == "SAME"
 
-    def test_different_sectors(self):
-        result = _fallback_ontology("238220", "424710")
-        assert result["related"] is False
-
-    def test_missing_codes(self):
-        result = _fallback_ontology("", "238220")
+    @pytest.mark.asyncio
+    async def test_different_geo(self, app_context):
+        ctx = _make_ctx(app_context)
+        result = await query_ontology(
+            query_type="GEO_CONTAINMENT",
+            code_a="TX",
+            code_b="CA",
+            ctx=ctx,
+        )
         assert result["related"] is False
 
 
 @pytest.mark.asyncio
-async def test_query_ontology_fallback(app_context):
-    """query_ontology should fall back when GraphDB is unavailable."""
-    ctx = _make_ctx(app_context)
-
-    result = await query_ontology(
-        query_type="INDUSTRY_RELATION",
-        code_a="238220",
-        code_b="238210",
-        ctx=ctx,
-    )
-
-    # GraphDB is unavailable in test, so fallback should kick in
-    assert "related" in result
-    assert "semantic_distance" in result
-
-
-@pytest.mark.asyncio
-async def test_check_shared_context_unavailable(app_context):
-    """check_shared_context should return empty when GraphDB unavailable."""
+async def test_check_shared_context_neo4j_unavailable(app_context):
+    """check_shared_context should return empty when Neo4j unavailable."""
     ctx = _make_ctx(app_context)
 
     result = await check_shared_context(
@@ -69,31 +149,37 @@ async def test_check_shared_context_unavailable(app_context):
 
 
 @pytest.mark.asyncio
-async def test_write_entity_triples_unavailable(app_context):
-    """write_entity_triples should return fallback when GraphDB unavailable."""
+async def test_batch_industry_filter_same_sector(app_context):
+    """batch_industry_filter should match candidates in same/related sectors."""
     ctx = _make_ctx(app_context)
 
-    result = await write_entity_triples(
-        entity_id="G-test0001",
-        attrs={"canonical_name": "Test Entity", "entity_type": "PHANTOM"},
+    result = await batch_industry_filter(
+        reference_naics="238220",
+        candidates=[
+            {"naics_code": "238210", "name": "Electrical Contractor", "golden_record_id": "G-001"},
+            {"naics_code": "236220", "name": "Home Builder", "golden_record_id": "G-002"},
+            {"naics_code": "541511", "name": "Software Dev", "golden_record_id": "G-003"},
+        ],
         ctx=ctx,
     )
 
-    assert result["success"] is False
-    assert result["fallback_to_changelog"] is True
+    assert result["total_candidates"] == 3
+    assert result["match_count"] >= 2  # 238210 (SIBLING) and 236220 (SAME_SECTOR or ANCESTOR)
+    matched_ids = [m["golden_record_id"] for m in result["matches"]]
+    assert "G-001" in matched_ids  # Same subsector
+    assert "G-002" in matched_ids  # Same sector
 
 
 @pytest.mark.asyncio
-async def test_write_merge_redirect_unavailable(app_context):
-    """write_merge_redirect should return fallback when GraphDB unavailable."""
+async def test_batch_industry_filter_empty(app_context):
+    """batch_industry_filter with no candidates should return empty."""
     ctx = _make_ctx(app_context)
 
-    result = await write_merge_redirect(
-        survivor_id="G-surv",
-        absorbed_id="G-abso",
-        survivor_updates={"name_variants": [], "unspsc_codes": []},
+    result = await batch_industry_filter(
+        reference_naics="238220",
+        candidates=[],
         ctx=ctx,
     )
 
-    assert result["success"] is False
-    assert result["fallback_to_changelog"] is True
+    assert result["match_count"] == 0
+    assert result["matches"] == []

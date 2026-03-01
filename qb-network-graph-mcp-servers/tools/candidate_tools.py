@@ -90,8 +90,8 @@ async def find_candidates(
 ) -> dict:
     """Retrieve candidate golden records by persona-dimension bucket keys.
 
-    Generates bucket keys from the orphan persona and queries MySQL indexed
-    columns to find matching golden records. Candidates are sorted by the
+    Generates bucket keys from the orphan persona and queries Neo4j indexed
+    Entity nodes to find matching golden records. Candidates are sorted by the
     number of shared bucket keys (more overlap = stronger signal).
 
     Args:
@@ -112,7 +112,7 @@ async def find_candidates(
     buckets_used = []
 
     for bk in keys:
-        members = app.mysql.find_by_bucket_key(bk)
+        members = app.neo4j.find_by_bucket_key(bk)
         buckets_used.append({"key": bk, "candidate_count": len(members)})
         total_before_dedup += len(members)
         for gr_id in members:
@@ -126,7 +126,7 @@ async def find_candidates(
 
     candidates = []
     for gr_id, matched_buckets in sorted_candidates:
-        gr_data = app.mysql.get_golden_record(gr_id)
+        gr_data = app.neo4j.get_golden_record(gr_id)
         if not gr_data:
             continue
         candidates.append({
@@ -207,7 +207,7 @@ async def compare_fields(
     if persona.industry.naics_code and cand_persona.industry.naics_code:
         o_sec = persona.industry.naics_code[:2]
         c_sec = cand_persona.industry.naics_code[:2]
-        if o_sec != c_sec and app.graphdb.available:
+        if o_sec != c_sec:
             from tools.knowledge_graph_tools import _query_ontology_internal
             ontology_result = _query_ontology_internal(
                 app, "INDUSTRY_RELATION",

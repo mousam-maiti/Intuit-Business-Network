@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { QB } from '@/constants/colors';
-import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
 import { config } from '@/config/env';
 
@@ -9,80 +8,106 @@ const CENTER_ID = config.currentEntityId;
 const CX = 500, CY = 400;
 
 /**
- * Two-level tree layout:
- *   Center (Company) → Industry group nodes → Entity leaves
+ * BFS radial layout — concentric rings by hop distance from center.
+ * Children cluster near their BFS parent for a natural tree-like spread.
  */
-function computeTreeLayout(entities, relationships) {
+function computeRadialLayout(entities, relationships, centerId) {
   const positions = new Map();
-  const industryNodes = [];   // virtual industry group nodes
-  if (!entities.length) return { positions, industryNodes };
+  if (!entities.length) return { positions, depthMap: new Map() };
 
-  // Separate center from others
-  const others = entities.filter(e => e.id !== CENTER_ID);
-  positions.set(CENTER_ID, { x: CX, y: CY });
-
-  // Group by industry
-  const groups = {};
-  others.forEach(e => {
-    const key = e.industry || '_none';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(e);
+  // Build undirected adjacency
+  const adj = new Map();
+  entities.forEach(e => adj.set(e.id, []));
+  relationships.forEach(r => {
+    if (adj.has(r.source) && adj.has(r.target)) {
+      adj.get(r.source).push(r.target);
+      adj.get(r.target).push(r.source);
+    }
   });
 
-  const groupKeys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
-  const groupCount = groupKeys.length;
+  // BFS from center
+  const depthMap = new Map();
+  const parentOf = new Map();
+  depthMap.set(centerId, 0);
+  const queue = [centerId];
+  let maxDepth = 0;
 
-  // Industry nodes sit on a ring around center
-  const industryR = 220;
-  // Entity leaves fan out behind their industry node
-  const leafBaseR = 120;
-  const leafMaxR = 200;
+  while (queue.length) {
+    const id = queue.shift();
+    const d = depthMap.get(id);
+    for (const neighbor of (adj.get(id) || [])) {
+      if (!depthMap.has(neighbor)) {
+        depthMap.set(neighbor, d + 1);
+        parentOf.set(neighbor, id);
+        maxDepth = Math.max(maxDepth, d + 1);
+        queue.push(neighbor);
+      }
+    }
+  }
 
-  groupKeys.forEach((key, gi) => {
-    const angle = (2 * Math.PI * gi) / groupCount - Math.PI / 2;
-    const ind = getIndustry(key === '_none' ? null : key);
-    const group = groups[key];
+  // Group by depth
+  const byDepth = new Map();
+  entities.forEach(e => {
+    const d = depthMap.get(e.id);
+    if (d === undefined) return;
+    if (!byDepth.has(d)) byDepth.set(d, []);
+    byDepth.get(d).push(e);
+  });
 
-    // Industry node position
-    const ix = CX + industryR * Math.cos(angle);
-    const iy = CY + industryR * Math.sin(angle);
-    const industryId = `__ind_${key}`;
+  // Place center
+  positions.set(centerId, { x: CX, y: CY });
 
-    positions.set(industryId, { x: ix, y: iy });
-    industryNodes.push({
-      id: industryId,
-      label: ind.label,
-      color: ind.color,
-      count: group.length,
-      naics: key,
+  // Depth 1: even distribution on ring
+  const depth1 = byDepth.get(1) || [];
+  const r1 = 200;
+  const depth1Angles = new Map();
+  depth1.forEach((e, i) => {
+    const angle = (2 * Math.PI * i) / depth1.length - Math.PI / 2;
+    depth1Angles.set(e.id, angle);
+    positions.set(e.id, {
+      x: CX + r1 * Math.cos(angle),
+      y: CY + r1 * Math.sin(angle),
+    });
+  });
+
+  // Depth 2+: fan out from parent in the parent's direction from center
+  for (let d = 2; d <= maxDepth; d++) {
+    const ents = byDepth.get(d) || [];
+    const byParent = new Map();
+    ents.forEach(e => {
+      const p = parentOf.get(e.id);
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(e);
     });
 
-    // Fan entities outward from the industry node
-    // Spread angle proportional to group size, but capped
-    const fanAngle = Math.min(Math.PI * 0.6, 0.15 + group.length * 0.08);
+    const rOuter = r1 + (d - 1) * 150;
 
-    // Sort by volume desc — higher volume closer
-    group.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    byParent.forEach((children, parentId) => {
+      const pp = positions.get(parentId);
+      if (!pp) return;
+      const parentAngle = Math.atan2(pp.y - CY, pp.x - CX);
+      const fanSpread = Math.min(Math.PI * 0.35, 0.15 + children.length * 0.1);
 
-    group.forEach((e, i) => {
-      const frac = group.length > 1 ? i / (group.length - 1) : 0.5;
-      const r = leafBaseR + (leafMaxR - leafBaseR) * frac;
-      const leafAngle = group.length > 1
-        ? angle + fanAngle * (i / (group.length - 1) - 0.5)
-        : angle;
-      positions.set(e.id, {
-        x: ix + r * Math.cos(leafAngle),
-        y: iy + r * Math.sin(leafAngle),
+      children.forEach((e, i) => {
+        const frac = children.length > 1 ? i / (children.length - 1) - 0.5 : 0;
+        const angle = parentAngle + fanSpread * frac;
+        positions.set(e.id, {
+          x: CX + rOuter * Math.cos(angle),
+          y: CY + rOuter * Math.sin(angle),
+        });
       });
     });
-  });
+  }
 
-  return { positions, industryNodes };
+  return { positions, depthMap };
 }
 
-export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode, onPathSelect, edgeFilter, showDormant, nativeOverrides = {}, nativeMerges = [], allEntities = [], allRelationships = [] }) {
+// Edge color by relationship direction relative to the entity pair
+const VENDOR_COLOR = QB.purple;
+const CLIENT_COLOR = QB.cyan || '#0284c7';
+
+export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode, onPathSelect, edgeFilter, showDormant, nativeOverrides = {}, nativeMerges = [], allEntities = [], allRelationships = [], supplyChainNodes = null }) {
   const [hNode, setHNode] = useState(null);
-  const [hIndustry, setHIndustry] = useState(null);
   const [zoom, setZoom] = useState(1);
   const svgRef = useRef(null);
 
@@ -98,21 +123,11 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
     });
   }, []);
 
-  // Compute tree layout
-  const { positions, industryNodes } = useMemo(
-    () => computeTreeLayout(allEntities, allRelationships),
+  // Compute radial layout based on relationships
+  const { positions, depthMap } = useMemo(
+    () => computeRadialLayout(allEntities, allRelationships, CENTER_ID),
     [allEntities, allRelationships]
   );
-
-  // Map entity id → industry group id
-  const entityToIndustry = useMemo(() => {
-    const map = {};
-    allEntities.forEach(e => {
-      if (e.id === CENTER_ID) return;
-      map[e.id] = `__ind_${e.industry || '_none'}`;
-    });
-    return map;
-  }, [allEntities]);
 
   const nativeOverrideIds = useMemo(() => new Set(Object.keys(nativeOverrides)), [nativeOverrides]);
 
@@ -135,19 +150,6 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
     visIds.delete(CENTER_ID);
     return allEntities.filter(e => visIds.has(e.id));
   }, [allEntities, visRel, edgeFilter]);
-
-  // Filter industry nodes to only those with visible entities, with updated counts
-  const visIndustryNodes = useMemo(() => {
-    if (edgeFilter === 'all') return industryNodes;
-    const countByInd = {};
-    visEnt.forEach(e => {
-      const indId = `__ind_${e.industry || '_none'}`;
-      countByInd[indId] = (countByInd[indId] || 0) + 1;
-    });
-    return industryNodes
-      .filter(n => countByInd[n.id])
-      .map(n => ({ ...n, count: countByInd[n.id] }));
-  }, [industryNodes, visEnt, edgeFilter]);
 
   const pos = (id) => positions.get(id) || { x: CX, y: CY };
   const mx = Math.max(...allRelationships.map(r => r.volume), 1);
@@ -172,15 +174,26 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
     };
   }, [positions]);
 
-  // Highlighted industry (when hovering an industry node)
-  const highlightedEntities = useMemo(() => {
-    if (!hIndustry) return null;
+  // Hovered node's neighbors
+  const hoverNeighbors = useMemo(() => {
+    if (!hNode) return null;
     const set = new Set();
-    allEntities.forEach(e => {
-      if (entityToIndustry[e.id] === hIndustry) set.add(e.id);
+    allRelationships.forEach(r => {
+      if (r.source === hNode) set.add(r.target);
+      if (r.target === hNode) set.add(r.source);
     });
+    set.add(hNode);
     return set;
-  }, [hIndustry, allEntities, entityToIndustry]);
+  }, [hNode, allRelationships]);
+
+  // Supply chain highlighting
+  const scSet = useMemo(() => supplyChainNodes ? new Set(supplyChainNodes) : null, [supplyChainNodes]);
+
+  // Depth ring colors
+  const depthColor = (d) => {
+    const colors = [QB.green, QB.purple, QB.orange, QB.cyan || '#0284c7', QB.red || '#dc2626', '#6b7280'];
+    return colors[Math.min(d, colors.length - 1)];
+  };
 
   return (
     <div className="graph-container">
@@ -191,85 +204,48 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="1" stdDeviation="2" floodOpacity="0.1" />
           </filter>
+          <marker id="arrow-vendor" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <path d="M0,0 L6,2 L0,4" fill={VENDOR_COLOR} opacity="0.4" />
+          </marker>
+          <marker id="arrow-client" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <path d="M0,0 L6,2 L0,4" fill={CLIENT_COLOR} opacity="0.4" />
+          </marker>
+          <marker id="arrow-chain" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+            <path d="M0,0 L6,2 L0,4" fill={QB.green} opacity="0.5" />
+          </marker>
         </defs>
 
-        {/* Level 1 edges: Center → Industry nodes */}
-        {visIndustryNodes.map(ind => {
-          const ip = pos(ind.id);
-          const dx = ip.x - CX, dy = ip.y - CY;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          const ux = dx / dist, uy = dy / dist;
-          return (
-            <line key={`c-${ind.id}`}
-              x1={CX + ux * 30} y1={CY + uy * 30}
-              x2={ip.x - ux * 24} y2={ip.y - uy * 24}
-              stroke={ind.color} strokeWidth={2 + ind.count * 0.3}
-              strokeOpacity={hIndustry && hIndustry !== ind.id ? 0.08 : 0.3}
-              className="transition-all duration-300"
-            />
-          );
-        })}
-
-        {/* Level 2 edges: Industry → Entity leaves */}
-        {visEnt.map(ent => {
-          const indId = entityToIndustry[ent.id];
-          const ind = industryNodes.find(n => n.id === indId);
-          if (!ind) return null;
-          const ip = pos(indId);
-          const ep = pos(ent.id);
-          const dx = ep.x - ip.x, dy = ep.y - ip.y;
+        {/* Relationship edges — direct entity-to-entity */}
+        {visRel.map(r => {
+          const sp = pos(r.source);
+          const tp = pos(r.target);
+          const dx = tp.x - sp.x, dy = tp.y - sp.y;
           const dist = Math.sqrt(dx * dx + dy * dy) || 1;
           const ux = dx / dist, uy = dy / dist;
 
-          // Find the actual relationship for this entity to get volume
-          const rel = allRelationships.find(r =>
-            (r.source === CENTER_ID && r.target === ent.id) ||
-            (r.target === CENTER_ID && r.source === ent.id)
-          );
-          const w = rel ? Math.max(1, (rel.volume / mx) * 4) : 1;
-          const isHovered = hNode === ent.id;
-          const isDimmed = (hIndustry && indId !== hIndustry) || (hNode && hNode !== ent.id && entityToIndustry[hNode] !== indId);
+          const w = Math.max(1, (r.volume / mx) * 4);
+          const isVendor = r.source !== CENTER_ID && r.target === CENTER_ID;
+          const color = isVendor ? VENDOR_COLOR : CLIENT_COLOR;
+
+          const sourceInChain = scSet && scSet.has(r.source);
+          const targetInChain = scSet && scSet.has(r.target);
+          const edgeInChain = sourceInChain && targetInChain;
+
+          const isHoverConnected = hoverNeighbors && (hoverNeighbors.has(r.source) && hoverNeighbors.has(r.target));
+          const isDimmed = (hoverNeighbors && !isHoverConnected) || (scSet && !edgeInChain);
+
+          const marker = edgeInChain ? 'url(#arrow-chain)' : isVendor ? 'url(#arrow-vendor)' : 'url(#arrow-client)';
 
           return (
-            <line key={`l-${ent.id}`}
-              x1={ip.x + ux * 22} y1={ip.y + uy * 22}
-              x2={ep.x - ux * 12} y2={ep.y - uy * 12}
-              stroke={ind.color}
-              strokeWidth={isHovered ? w + 1.5 : w}
-              strokeOpacity={isDimmed ? 0.06 : isHovered ? 0.7 : 0.2}
+            <line key={`e-${r.source}-${r.target}`}
+              x1={sp.x + ux * 14} y1={sp.y + uy * 14}
+              x2={tp.x - ux * 14} y2={tp.y - uy * 14}
+              stroke={edgeInChain ? QB.green : color}
+              strokeWidth={edgeInChain ? w + 1 : isHoverConnected ? w + 1 : w}
+              strokeOpacity={isDimmed ? 0.04 : edgeInChain ? 0.55 : isHoverConnected ? 0.6 : 0.18}
+              markerEnd={marker}
               className="transition-all duration-300"
             />
-          );
-        })}
-
-        {/* Industry group nodes */}
-        {visIndustryNodes.map(ind => {
-          const ip = pos(ind.id);
-          const r = 18 + Math.min(ind.count, 10) * 1.5;
-          const isHovered = hIndustry === ind.id;
-
-          return (
-            <g key={ind.id}
-              onMouseEnter={() => setHIndustry(ind.id)}
-              onMouseLeave={() => setHIndustry(null)}
-              className="cursor-pointer"
-              opacity={hIndustry && hIndustry !== ind.id ? 0.2 : 1}
-              style={{ transition: 'opacity 0.3s' }}>
-              {isHovered && <circle cx={ip.x} cy={ip.y} r={r + 4} fill="none" stroke={ind.color} strokeWidth="2" strokeDasharray="4 3" opacity="0.4" />}
-              <circle cx={ip.x} cy={ip.y} r={r}
-                fill={ind.color + '20'} stroke={ind.color} strokeWidth={isHovered ? 2 : 1.2}
-                filter={isHovered ? 'url(#shadow)' : undefined} />
-              <text x={ip.x} y={ip.y - 1} textAnchor="middle" fill={ind.color} fontSize="10" fontWeight="600" fontFamily="system-ui">
-                {ind.count}
-              </text>
-              <text x={ip.x} y={ip.y + 9} textAnchor="middle" fill={ind.color} fontSize="7" fontFamily="system-ui" opacity="0.8">
-                entities
-              </text>
-              {/* Label below */}
-              <text x={ip.x} y={ip.y + r + 14} textAnchor="middle" fill={QB.textPrimary} fontSize="9" fontWeight="500" fontFamily="system-ui">
-                {ind.label.length > 18 ? ind.label.slice(0, 16) + '\u2026' : ind.label}
-              </text>
-            </g>
           );
         })}
 
@@ -288,20 +264,22 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
           );
         })()}
 
-        {/* Entity leaf nodes */}
+        {/* Entity nodes */}
         {visEnt.map(ent => {
           const ep = pos(ent.id);
-          const ind = getIndustry(ent.industry);
+          const d = depthMap.get(ent.id) || 1;
+          const nodeColor = depthColor(d);
           const sel = selectedId === ent.id;
-          const indId = entityToIndustry[ent.id];
           const isHovered = hNode === ent.id;
-          const isDimmed = (hIndustry && indId !== hIndustry) || (hNode && hNode !== ent.id && entityToIndustry[hNode] !== indId);
+          const isDimmed = (hoverNeighbors && !hoverNeighbors.has(ent.id)) || (scSet && !scSet.has(ent.id));
+          const isInChain = scSet && scSet.has(ent.id);
           const r = sel ? 12 : 9;
           const hasNative = nativeOverrideIds.has(ent.id);
 
+          // Volume label — find the highest-volume direct relationship
           const rel = allRelationships.find(rl =>
-            (rl.source === CENTER_ID && rl.target === ent.id) ||
-            (rl.target === CENTER_ID && rl.source === ent.id)
+            (rl.source === ent.id && (rl.target === CENTER_ID || rl.target === hNode)) ||
+            (rl.target === ent.id && (rl.source === CENTER_ID || rl.source === hNode))
           );
 
           return (
@@ -312,10 +290,11 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
               className="cursor-pointer"
               opacity={isDimmed ? 0.1 : 1}
               style={{ transition: 'opacity 0.3s' }}>
-              {sel && <circle cx={ep.x} cy={ep.y} r={r + 5} fill="none" stroke={ind.color} strokeWidth="2" strokeDasharray="4 3" opacity="0.5" />}
+              {sel && <circle cx={ep.x} cy={ep.y} r={r + 5} fill="none" stroke={nodeColor} strokeWidth="2" strokeDasharray="4 3" opacity="0.5" />}
               <circle cx={ep.x} cy={ep.y} r={r}
-                fill={ind.color + '20'} stroke={ind.color + (sel ? '' : '80')}
-                strokeWidth={sel ? 2 : isHovered ? 1.8 : 1}
+                fill={isInChain ? nodeColor + '35' : nodeColor + '20'}
+                stroke={isInChain ? QB.green : nodeColor + (sel ? '' : '80')}
+                strokeWidth={isInChain ? 2.5 : sel ? 2 : isHovered ? 1.8 : 1}
                 filter={isHovered ? 'url(#shadow)' : undefined} />
               {hasNative && (
                 <circle cx={ep.x + r * 0.6} cy={ep.y - r * 0.6} r="3.5" fill={QB.purple} stroke="white" strokeWidth="1" />
@@ -329,6 +308,12 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
                     {ent.name.length > 22 ? ent.name.slice(0, 20) + '\u2026' : ent.name}
                   </text>
                 </g>
+              )}
+              {/* Depth badge */}
+              {d > 1 && !isHovered && !sel && (
+                <text x={ep.x} y={ep.y + 3} textAnchor="middle" fill={nodeColor} fontSize="7" fontWeight="600" fontFamily="system-ui">
+                  {d}
+                </text>
               )}
               {/* Volume label on hover */}
               {isHovered && rel && (
@@ -362,12 +347,20 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
           Company
         </span>
         <span className="flex items-center gap-1">
-          <svg width="14" height="14"><circle cx="7" cy="7" r="5" fill={QB.purple + '20'} stroke={QB.purple} strokeWidth="1.2" /><text x="7" y="10" textAnchor="middle" fill={QB.purple} fontSize="7" fontWeight="600">3</text></svg>
-          Industry
+          <svg width="20" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke={VENDOR_COLOR} strokeWidth="2" opacity="0.5" /></svg>
+          Vendor
         </span>
         <span className="flex items-center gap-1">
-          <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#0284c720" stroke="#0284c780" strokeWidth="1" /></svg>
-          Entity
+          <svg width="20" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke={CLIENT_COLOR} strokeWidth="2" opacity="0.5" /></svg>
+          Client
+        </span>
+        <span className="flex items-center gap-1">
+          <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill={QB.purple + '20'} stroke={QB.purple + '80'} strokeWidth="1" /></svg>
+          1-hop
+        </span>
+        <span className="flex items-center gap-1">
+          <svg width="12" height="12"><circle cx="6" cy="6" r="5" fill={QB.orange + '20'} stroke={QB.orange + '80'} strokeWidth="1" /></svg>
+          2+ hop
         </span>
         {nativeOverrideIds.size > 0 && (
           <span className="flex items-center gap-1">

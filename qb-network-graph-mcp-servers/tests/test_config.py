@@ -6,7 +6,7 @@ import yaml
 from config import (
     _env, _build, load_config,
     ServerConfig, Thresholds, Weights, MySQLConfig, MilvusConfig,
-    AgentConfig, LLMConfig, EmbeddingConfig, KnowledgeGraphConfig,
+    AgentConfig, LLMConfig, EmbeddingConfig, Neo4jConfig, RedisConfig,
     BucketConfig, ReEvaluation,
 )
 
@@ -81,17 +81,17 @@ class TestDataclassDefaults:
 
     def test_weights(self):
         w = Weights()
-        assert w.identity == 0.35
-        assert w.industry == 0.25
+        assert w.identity == 0.45
+        assert w.industry == 0.20
         assert w.location == 0.15
-        assert w.commodity == 0.15
+        assert w.commodity == 0.10
         assert w.behavioral == 0.10
 
     def test_weights_as_dict(self):
         w = Weights()
         d = w.as_dict()
-        assert d == {"identity": 0.35, "industry": 0.25, "location": 0.15,
-                     "commodity": 0.15, "behavioral": 0.10}
+        assert d == {"identity": 0.45, "industry": 0.20, "location": 0.15,
+                     "commodity": 0.10, "behavioral": 0.10}
         assert abs(sum(d.values()) - 1.0) < 0.001
 
     def test_mysql_config(self):
@@ -103,6 +103,21 @@ class TestDataclassDefaults:
         c = MilvusConfig()
         assert c.host == "localhost"
         assert c.port == 19530
+
+    def test_neo4j_config(self):
+        c = Neo4jConfig()
+        assert c.uri == "bolt://localhost:7687"
+        assert c.user == "neo4j"
+        assert c.password == "neo4j_pass"
+        assert c.database == "neo4j"
+        assert c.max_pool_size == 50
+
+    def test_redis_config(self):
+        c = RedisConfig()
+        assert c.host == "localhost"
+        assert c.port == 6379
+        assert c.db == 0
+        assert c.default_ttl == 3600
 
     def test_llm_config(self):
         c = LLMConfig()
@@ -119,10 +134,24 @@ class TestDataclassDefaults:
         assert isinstance(c.thresholds, Thresholds)
         assert isinstance(c.weights, Weights)
         assert isinstance(c.mysql, MySQLConfig)
+        assert isinstance(c.neo4j, Neo4jConfig)
+        assert isinstance(c.redis, RedisConfig)
 
 
 class TestLoadConfig:
-    def test_loads_from_yaml(self, tmp_path):
+    # Env vars loaded from .env override YAML; clear them for YAML-only tests.
+    _ENV_OVERRIDES = [
+        "MCP_SERVER_HOST", "MCP_SERVER_PORT", "MYSQL_HOST", "MYSQL_PORT",
+        "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "MILVUS_HOST",
+        "MILVUS_PORT", "GEMINI_API_KEY", "THRESHOLD_AUTO_MERGE",
+    ]
+
+    def _clear_env(self, monkeypatch):
+        for key in self._ENV_OVERRIDES:
+            monkeypatch.delenv(key, raising=False)
+
+    def test_loads_from_yaml(self, tmp_path, monkeypatch):
+        self._clear_env(monkeypatch)
         config_data = {
             "server": {"host": "127.0.0.1", "port": 9999},
             "thresholds": {"auto_merge": 0.90},
@@ -143,7 +172,8 @@ class TestLoadConfig:
         assert cfg.milvus.host == "milvus.example.com"
         assert cfg.buckets.max_commodity_keywords == 5
 
-    def test_empty_yaml(self, tmp_path):
+    def test_empty_yaml(self, tmp_path, monkeypatch):
+        self._clear_env(monkeypatch)
         config_file = tmp_path / "empty.yaml"
         config_file.write_text("")
         cfg = load_config(str(config_file))
@@ -166,6 +196,7 @@ class TestLoadConfig:
         assert cfg.thresholds.auto_merge == 0.95
 
     def test_mcp_config_path_env(self, tmp_path, monkeypatch):
+        self._clear_env(monkeypatch)
         config_data = {"server": {"port": 7777}}
         config_file = tmp_path / "custom.yaml"
         config_file.write_text(yaml.dump(config_data))
@@ -178,7 +209,8 @@ class TestLoadConfig:
         with pytest.raises(FileNotFoundError):
             load_config("/nonexistent/path/config.yaml")
 
-    def test_all_sections_loaded(self, tmp_path):
+    def test_all_sections_loaded(self, tmp_path, monkeypatch):
+        self._clear_env(monkeypatch)
         config_data = {
             "server": {"host": "h", "port": 1},
             "thresholds": {"auto_merge": 0.5},
@@ -186,7 +218,8 @@ class TestLoadConfig:
             "re_evaluation": {"max_chain_depth": 5},
             "llm": {"provider": "test"},
             "embedding": {"provider": "test"},
-            "knowledge_graph": {"timeout_ms": 5000},
+            "neo4j": {"uri": "bolt://neo4j-host:7687", "password": "test_pass"},
+            "redis": {"host": "redis-host", "port": 6380},
             "mysql": {"host": "m"},
             "milvus": {"host": "v"},
             "buckets": {"max_commodity_keywords": 10},
@@ -199,4 +232,7 @@ class TestLoadConfig:
         assert cfg.re_evaluation.max_chain_depth == 5
         assert cfg.llm.provider == "test"
         assert cfg.embedding.provider == "test"
-        assert cfg.knowledge_graph.timeout_ms == 5000
+        assert cfg.neo4j.uri == "bolt://neo4j-host:7687"
+        assert cfg.neo4j.password == "test_pass"
+        assert cfg.redis.host == "redis-host"
+        assert cfg.redis.port == 6380

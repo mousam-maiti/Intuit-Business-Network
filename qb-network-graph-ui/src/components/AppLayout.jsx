@@ -9,6 +9,7 @@ import { ROUTES, viewToPath } from '@/config/routes';
 import { ACME_ENTITY, config } from '@/config/env';
 import { getPendingMatches } from '@/api/matching';
 import { getEntity } from '@/api/entities';
+import { getNetwork } from '@/api/relationships';
 import { getAlerts, dismissAlert } from '@/api/alerts';
 import { useAIChat } from '@/hooks/useAIChat';
 import { AIPanel, AlertBanner } from '@/components/shared';
@@ -30,6 +31,8 @@ export default function AppLayout() {
   const [aiOpen, setAiOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState(ACME_ENTITY);
+  const [networkEntities, setNetworkEntities] = useState([]);
+  const [networkRelationships, setNetworkRelationships] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -40,6 +43,10 @@ export default function AppLayout() {
   useEffect(() => {
     getEntity(config.currentEntityId).then(r => {
       if (r.data) setSelectedEntity(r.data);
+    }).catch(() => {});
+    getNetwork(config.currentEntityId, 5).then(r => {
+      setNetworkEntities(r.data.entities || []);
+      setNetworkRelationships(r.data.relationships || []);
     }).catch(() => {});
   }, []);
 
@@ -201,7 +208,7 @@ export default function AppLayout() {
 
         {/* Page content via React Router Outlet */}
         <main className="flex-1 min-h-0 overflow-hidden">
-          <Outlet context={{ selectedEntity, setSelectedEntity, chat, goTo }} />
+          <Outlet context={{ selectedEntity, setSelectedEntity, chat, goTo, networkEntities, networkRelationships }} />
         </main>
       </div>
 

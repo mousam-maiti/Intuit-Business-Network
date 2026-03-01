@@ -58,10 +58,10 @@ class Thresholds:
 
 @dataclass
 class Weights:
-    identity: float = 0.35
-    industry: float = 0.25
+    identity: float = 0.45
+    industry: float = 0.20
     location: float = 0.15
-    commodity: float = 0.15
+    commodity: float = 0.10
     behavioral: float = 0.10
 
     def as_dict(self) -> dict[str, float]:
@@ -81,7 +81,7 @@ class ReEvaluation:
 @dataclass
 class LLMConfig:
     provider: str = "gemini"
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-2.5-pro"
     ambiguous_model: str = "gemini-2.5-pro"
     max_tokens: int = 1024
     temperature: float = 0.0
@@ -99,17 +99,6 @@ class EmbeddingConfig:
     fallback_provider: str = "local"
     fallback_model: str = "all-MiniLM-L6-v2"
     fallback_dimension: int = 384
-
-
-@dataclass
-class KnowledgeGraphConfig:
-    sparql_endpoint: str = "http://localhost:7200/repositories/qb-ontology"
-    update_endpoint: str = "http://localhost:7200/repositories/qb-ontology/statements"
-    timeout_ms: int = 2000
-    max_concurrent_queries: int = 2
-    direct_write: bool = True
-    fallback_to_changelog: bool = True
-    t_box_cache_ttl_hours: int = 24
 
 
 @dataclass
@@ -132,6 +121,26 @@ class MilvusConfig:
 
 
 @dataclass
+class Neo4jConfig:
+    """Neo4j — directed graph traversal for supply chain paths."""
+    uri: str = "bolt://localhost:7687"
+    user: str = "neo4j"
+    password: str = "neo4j_pass"
+    database: str = "neo4j"
+    max_pool_size: int = 50
+
+
+@dataclass
+class RedisConfig:
+    """Redis — hot subgraph caching with TTL-based invalidation."""
+    host: str = "localhost"
+    port: int = 6379
+    password: str = ""
+    db: int = 0
+    default_ttl: int = 3600
+
+
+@dataclass
 class BucketConfig:
     max_commodity_keywords: int = 3
 
@@ -144,9 +153,10 @@ class AgentConfig:
     re_evaluation: ReEvaluation = field(default_factory=ReEvaluation)
     llm: LLMConfig = field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    knowledge_graph: KnowledgeGraphConfig = field(default_factory=KnowledgeGraphConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
     milvus: MilvusConfig = field(default_factory=MilvusConfig)
+    neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
+    redis: RedisConfig = field(default_factory=RedisConfig)
     buckets: BucketConfig = field(default_factory=BucketConfig)
 
 
@@ -181,9 +191,10 @@ def load_config(path: str | None = None) -> AgentConfig:
         re_evaluation=_build(ReEvaluation, raw.get("re_evaluation")),
         llm=_build(LLMConfig, raw.get("llm")),
         embedding=_build(EmbeddingConfig, raw.get("embedding")),
-        knowledge_graph=_build(KnowledgeGraphConfig, raw.get("knowledge_graph")),
         mysql=_build(MySQLConfig, raw.get("mysql")),
         milvus=_build(MilvusConfig, raw.get("milvus")),
+        neo4j=_build(Neo4jConfig, raw.get("neo4j")),
+        redis=_build(RedisConfig, raw.get("redis")),
         buckets=BucketConfig(max_commodity_keywords=max_kw),
     )
 
@@ -233,10 +244,19 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.milvus.port = _env("MILVUS_PORT", cfg.milvus.port, int)
     cfg.milvus.gemini_api_key = _env("GEMINI_API_KEY", cfg.milvus.gemini_api_key)
 
-    # Knowledge Graph
-    cfg.knowledge_graph.sparql_endpoint = _env("KG_SPARQL_ENDPOINT", cfg.knowledge_graph.sparql_endpoint)
-    cfg.knowledge_graph.update_endpoint = _env("KG_UPDATE_ENDPOINT", cfg.knowledge_graph.update_endpoint)
-    cfg.knowledge_graph.timeout_ms = _env("KG_TIMEOUT_MS", cfg.knowledge_graph.timeout_ms, int)
+    # Neo4j
+    cfg.neo4j.uri = _env("NEO4J_URI", cfg.neo4j.uri)
+    cfg.neo4j.user = _env("NEO4J_USER", cfg.neo4j.user)
+    cfg.neo4j.password = _env("NEO4J_PASSWORD", cfg.neo4j.password)
+    cfg.neo4j.database = _env("NEO4J_DATABASE", cfg.neo4j.database)
+    cfg.neo4j.max_pool_size = _env("NEO4J_MAX_POOL_SIZE", cfg.neo4j.max_pool_size, int)
+
+    # Redis
+    cfg.redis.host = _env("REDIS_HOST", cfg.redis.host)
+    cfg.redis.port = _env("REDIS_PORT", cfg.redis.port, int)
+    cfg.redis.password = _env("REDIS_PASSWORD", cfg.redis.password)
+    cfg.redis.db = _env("REDIS_DB", cfg.redis.db, int)
+    cfg.redis.default_ttl = _env("REDIS_DEFAULT_TTL", cfg.redis.default_ttl, int)
 
     # Buckets
     cfg.buckets.max_commodity_keywords = _env("BUCKET_MAX_COMMODITY_KEYWORDS", cfg.buckets.max_commodity_keywords, int)

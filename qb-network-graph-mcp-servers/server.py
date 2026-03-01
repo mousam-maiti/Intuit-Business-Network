@@ -24,13 +24,13 @@ from app import mcp
 
 # Import all tool modules — this triggers @mcp.tool() registration
 import tools.candidate_tools       # noqa: F401 — find_candidates, compare_fields, semantic_similarity
-import tools.knowledge_graph_tools # noqa: F401 — query_ontology, check_shared_context, write_entity_triples, write_merge_redirect
+import tools.knowledge_graph_tools # noqa: F401 — query_ontology, check_shared_context, batch_industry_filter
 import tools.entity_writer_tools   # noqa: F401 — merge_into_golden_record, create_golden_record, submit_for_review, merge_golden_records, log_decision
-import tools.search_tools          # noqa: F401 — search_entities, describe_entity, query_network, aggregate_stats, search_by_relationship, get_merge_history
+import tools.search_tools          # noqa: F401 — search_entities, describe_entity, query_network, aggregate_stats, search_by_relationship, get_company_connections, get_merge_history, traverse_supply_chain
 
 from config import load_config
 
-logger.info("All 18 tools registered")
+logger.info("All 19 tools registered")
 
 
 def main():

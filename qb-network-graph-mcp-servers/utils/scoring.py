@@ -374,4 +374,13 @@ def compute_composite(
     for dim_name, adj_weight in adjusted.items():
         composite += dimensions[dim_name].score * adj_weight
 
+    # Identity floor cap: if identity scored below 0.55 and identity data
+    # is available, cap composite at 0.70 to prevent "same industry competitor"
+    # patterns from reaching high-confidence territory.
+    identity_dim = dimensions.get("identity")
+    if (identity_dim
+            and identity_dim.confidence != DimensionConfidence.INSUFFICIENT
+            and identity_dim.score < 0.55):
+        composite = min(composite, 0.70)
+
     return round(composite, 4), {k: round(v, 4) for k, v in adjusted.items()}, sparsity_adjusted

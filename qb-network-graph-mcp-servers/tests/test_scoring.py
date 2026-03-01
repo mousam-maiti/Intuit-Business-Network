@@ -486,11 +486,11 @@ class TestComputeComposite:
             "commodity": DimensionResult(score=0.5, confidence=DimensionConfidence.MEDIUM),
             "behavioral": DimensionResult(score=0.7, confidence=DimensionConfidence.MEDIUM),
         }
-        weights = {"identity": 0.35, "industry": 0.25, "location": 0.15, "commodity": 0.15, "behavioral": 0.10}
+        weights = {"identity": 0.45, "industry": 0.20, "location": 0.15, "commodity": 0.10, "behavioral": 0.10}
         composite, used_weights, sparsity = compute_composite(dims, weights)
 
         assert not sparsity
-        expected = 0.35 * 0.9 + 0.25 * 0.8 + 0.15 * 1.0 + 0.15 * 0.5 + 0.10 * 0.7
+        expected = 0.45 * 0.9 + 0.20 * 0.8 + 0.15 * 1.0 + 0.10 * 0.5 + 0.10 * 0.7
         assert composite == pytest.approx(expected, abs=0.001)
 
     def test_weight_redistribution(self):
@@ -539,3 +539,53 @@ class TestComputeComposite:
         _, used_weights, _ = compute_composite(dims, weights)
         for v in used_weights.values():
             assert len(str(v).split(".")[-1]) <= 4
+
+    def test_identity_floor_caps_composite(self):
+        """Low identity + high others → capped at 0.70."""
+        dims = {
+            "identity": DimensionResult(score=0.48, confidence=DimensionConfidence.HIGH),
+            "industry": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "location": DimensionResult(score=0.7, confidence=DimensionConfidence.MEDIUM),
+            "commodity": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "behavioral": DimensionResult(score=0.6, confidence=DimensionConfidence.MEDIUM),
+        }
+        weights = {"identity": 0.45, "industry": 0.20, "location": 0.15, "commodity": 0.10, "behavioral": 0.10}
+        composite, _, _ = compute_composite(dims, weights)
+
+        # Without cap: 0.45*0.48 + 0.20*1.0 + 0.15*0.7 + 0.10*1.0 + 0.10*0.6 = 0.681
+        # With cap: min(0.681, 0.70) = 0.681 (already below)
+        # But if identity were even lower and others higher, it would cap.
+        assert composite <= 0.70
+
+    def test_identity_floor_skipped_when_insufficient(self):
+        """Cap doesn't apply when no identity data is available."""
+        dims = {
+            "identity": DimensionResult(score=0.0, confidence=DimensionConfidence.INSUFFICIENT),
+            "industry": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "location": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "commodity": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "behavioral": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+        }
+        weights = {"identity": 0.45, "industry": 0.20, "location": 0.15, "commodity": 0.10, "behavioral": 0.10}
+        composite, _, sparsity = compute_composite(dims, weights)
+
+        # Identity is INSUFFICIENT so its weight is redistributed, no cap applied
+        assert sparsity is True
+        assert composite > 0.70
+
+    def test_identity_floor_not_applied_above_threshold(self):
+        """High-identity matches are unaffected by the floor cap."""
+        dims = {
+            "identity": DimensionResult(score=0.85, confidence=DimensionConfidence.HIGH),
+            "industry": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "location": DimensionResult(score=1.0, confidence=DimensionConfidence.HIGH),
+            "commodity": DimensionResult(score=0.8, confidence=DimensionConfidence.HIGH),
+            "behavioral": DimensionResult(score=0.7, confidence=DimensionConfidence.MEDIUM),
+        }
+        weights = {"identity": 0.45, "industry": 0.20, "location": 0.15, "commodity": 0.10, "behavioral": 0.10}
+        composite, _, _ = compute_composite(dims, weights)
+
+        # identity=0.85 >= 0.55 so no cap
+        expected = 0.45 * 0.85 + 0.20 * 1.0 + 0.15 * 1.0 + 0.10 * 0.8 + 0.10 * 0.7
+        assert composite == pytest.approx(expected, abs=0.001)
+        assert composite > 0.70

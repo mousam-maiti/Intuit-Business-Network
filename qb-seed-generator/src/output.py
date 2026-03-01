@@ -68,7 +68,25 @@ def write_all(
     _write_json(invoice_line_items, base / "mysql" / "invoice_line_items.json")
     _write_json(payments, base / "mysql" / "payments.json")
 
+    # ── Supply chain edges (debug) ──
+    from src.generators.supply_chain import INTER_COMPANY_EDGES
+    from src.generators.companies import QB_ACCOUNTS
+    _company_names = {c["company_id"]: c["company_name"] for c in QB_ACCOUNTS}
+    sc_edges = [
+        {
+            "buyer_id": b, "seller_id": s,
+            "buyer_name": _company_names.get(b, f"Company {b}"),
+            "seller_name": _company_names.get(s, f"Company {s}"),
+        }
+        for b, s in INTER_COMPANY_EDGES
+    ]
+    _ensure_dir(base / "debug")
+    _write_json(sc_edges, base / "debug" / "supply_chain_edges.json")
+
     # ── Summary stats ──
+    ic_vendor_count = sum(1 for r in vendor_records if r.get("is_intercompany"))
+    pool_vendor_count = len(vendor_records) - ic_vendor_count
+
     print("\n" + "=" * 60)
     print("SEED DATA SUMMARY")
     print("=" * 60)
@@ -76,6 +94,8 @@ def write_all(
     print(f"  Vendor pool (truth):  {len(vendor_pool):>8,}")
     print(f"  Client pool (truth):  {len(client_pool):>8,}")
     print(f"  Vendor records:       {len(vendor_records):>8,}  (across all accounts)")
+    print(f"    Inter-company:      {ic_vendor_count:>8,}  ({len(INTER_COMPANY_EDGES)} edges)")
+    print(f"    Pool vendors:       {pool_vendor_count:>8,}")
     print(f"  Customer records:     {len(customer_records):>8,}  (across all accounts)")
     print(f"  Bills:                {len(bills):>8,}")
     print(f"  Bill line items:      {len(bill_line_items):>8,}")
@@ -87,11 +107,13 @@ def write_all(
     # Per-account breakdown
     print("Per-account breakdown:")
     for cid in sorted(set(r["company_id"] for r in vendor_records)):
-        v_count = sum(1 for r in vendor_records if r["company_id"] == cid)
+        v_total = sum(1 for r in vendor_records if r["company_id"] == cid)
+        v_ic = sum(1 for r in vendor_records if r["company_id"] == cid and r.get("is_intercompany"))
         c_count = sum(1 for r in customer_records if r["company_id"] == cid)
         b_count = sum(1 for b in bills if b["company_id"] == cid)
         i_count = sum(1 for i in invoices if i["company_id"] == cid)
-        print(f"  Company {cid:>2d}: {v_count:>3d} vendors, {c_count:>3d} customers, "
+        ic_label = f" ({v_ic} IC)" if v_ic else ""
+        print(f"  Company {cid:>2d}: {v_total:>3d} vendors{ic_label}, {c_count:>3d} customers, "
               f"{b_count:>5d} bills, {i_count:>5d} invoices")
 
     # Name variation stats

@@ -1,5 +1,6 @@
 package com.qb.classifier;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.qb.classifier.classify.PersonaBuilder;
@@ -9,6 +10,7 @@ import com.qb.classifier.model.ClassifiedPersona;
 import com.qb.classifier.model.EntityConnection;
 import com.qb.classifier.model.ResolutionRequest;
 import com.qb.classifier.stream.PaimonConsumer;
+import com.qb.classifier.stream.PaimonGoldWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +57,9 @@ public class App {
             AgentClient agent = classifyOnly ? null : new AgentClient(
                 config.agentBaseUrl, config.agentTimeoutMs, config.dryRun
             );
+
+            // Initialize Paimon gold writer for persistence after each /resolve
+            PaimonGoldWriter goldWriter = classifyOnly ? null : new PaimonGoldWriter(config);
 
             // Wire dead-letter sink for failed agent calls
             Path deadLetterDir = Path.of("dead-letter");
@@ -110,6 +115,31 @@ public class App {
                     // Send to agent
                     ResolutionRequest request = ResolutionRequest.from(conn, persona);
                     String response = agent.resolve(request);
+
+                    // Write resolved data to Paimon gold tables
+                    if (response != null && goldWriter != null && goldWriter.isAvailable()) {
+                        try {
+                            JsonNode responseJson = JSON.readTree(response);
+                            // Write golden record (after state)
+                            JsonNode grAfter = responseJson.get("golden_record_after");
+                            if (grAfter != null && !grAfter.isNull()) {
+                                goldWriter.writeGoldenRecord(grAfter);
+                            }
+                            // Write relationship if present
+                            JsonNode relationship = responseJson.get("relationship");
+                            if (relationship != null && !relationship.isNull()) {
+                                goldWriter.writeRelationship(relationship);
+                            }
+                            // Write audit record if present
+                            JsonNode audit = responseJson.get("audit_record");
+                            if (audit != null && !audit.isNull()) {
+                                goldWriter.writeAudit(audit);
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to write to Paimon gold for {}: {}",
+                                conn.displayName(), e.getMessage());
+                        }
+                    }
 
                     if (log.isDebugEnabled() && response != null) {
                         log.debug("[{}] {} → {} | identity={} industry={} location={} commodity={} behavioral={}",

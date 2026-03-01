@@ -5,7 +5,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, validator
 
 
 # ── Database models ─────────────────────────────────────────
@@ -89,6 +91,12 @@ class AIChart(BaseModel):
 class AIScore(BaseModel):
     label: str
     value: float
+
+    @validator("value", pre=True)
+    def parse_value(cls, v):
+        if isinstance(v, str):
+            v = re.sub(r"[^\d.\-]", "", v)
+        return float(v)
 
 
 class AISignal(BaseModel):

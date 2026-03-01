@@ -4,12 +4,10 @@ import { QB } from '@/constants/colors';
 import { INDUSTRIES, getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
 import { getRelType } from '@/utils/graph';
-import { getEntities } from '@/api/entities';
-import { getAllRelationships } from '@/api/relationships';
 import { getNativeOverrides, saveNativeOverride } from '@/api/native';
 import { Widget, RelTypeBadge, EntityDetailPanel } from '@/components/shared';
 
-export default function SearchPage({ onNavigate }) {
+export default function SearchPage({ onNavigate, networkEntities = [], networkRelationships = [] }) {
   const [q, setQ] = useState('');
   const [indFilter, setIndFilter] = useState(null);
   const [typeFilter, setTypeFilter] = useState('all');
@@ -18,12 +16,8 @@ export default function SearchPage({ onNavigate }) {
   const [selectedEntity, setSelectedEntity] = useState(null);
   const inputRef = useRef(null);
 
-  const [entities, setEntities] = useState([]);
-  const [relationships, setRelationships] = useState([]);
   const [nativeOverrides, setNativeOverrides] = useState({});
   useEffect(() => {
-    getEntities().then(r => setEntities(r.data));
-    getAllRelationships().then(r => setRelationships(r.data));
     getNativeOverrides().then(r => setNativeOverrides(r.data));
   }, []);
 
@@ -39,21 +33,21 @@ export default function SearchPage({ onNavigate }) {
   const typeaheadResults = useMemo(() => {
     if (q.length < 2) return [];
     const lower = q.toLowerCase();
-    return entities.filter((e) =>
+    return networkEntities.filter((e) =>
       e.name.toLowerCase().includes(lower) ||
       (e.variants || []).some((v) => v.toLowerCase().includes(lower)) ||
       getIndustry(e.industry).label.toLowerCase().includes(lower)
     ).slice(0, 5);
-  }, [q, entities]);
+  }, [q, networkEntities]);
 
-  const selectedEntityId = entities.length > 0 ? entities[0]?.id : null;
+  const selectedEntityId = networkEntities.length > 0 ? networkEntities[0]?.id : null;
 
   const filtered = useMemo(() => {
-    let list = entities.filter((e) => {
+    let list = networkEntities.filter((e) => {
       const mq = !q || e.name.toLowerCase().includes(q.toLowerCase()) || getIndustry(e.industry).label.toLowerCase().includes(q.toLowerCase());
       const mi = !indFilter || e.industry === indFilter;
       if (typeFilter !== 'all' && selectedEntityId) {
-        const hasType = relationships.some((r) => {
+        const hasType = networkRelationships.some((r) => {
           if (typeFilter === 'vendor') return r.source === selectedEntityId && r.target === e.id;
           return r.target === selectedEntityId && r.source === e.id;
         });
@@ -65,7 +59,7 @@ export default function SearchPage({ onNavigate }) {
     if (sortBy === 'connections') list = [...list].sort((a, b) => (b.vendors + b.clients) - (a.vendors + a.clients));
     if (sortBy === 'confidence') list = [...list].sort((a, b) => b.confidence - a.confidence);
     return list;
-  }, [q, indFilter, typeFilter, sortBy, entities, relationships, selectedEntityId]);
+  }, [q, indFilter, typeFilter, sortBy, networkEntities, networkRelationships, selectedEntityId]);
 
   return (
     <div className="flex flex-col h-full">
@@ -84,7 +78,7 @@ export default function SearchPage({ onNavigate }) {
               <div className="px-3 py-1.5 text-[10px] font-semibold tracking-wider" style={{ backgroundColor: '#F9FAFB', color: QB.textMuted, letterSpacing: '0.08em' }}>SUGGESTIONS &middot; &lt;30ms typeahead</div>
               {typeaheadResults.map((ent) => {
                 const ind = getIndustry(ent.industry);
-                const dr = selectedEntityId ? relationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
+                const dr = selectedEntityId ? networkRelationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
                 return (
                   <div key={ent.id} onMouseDown={() => { setQ(ent.name); setShowTypeahead(false); setSelectedEntity(ent); }}
                     className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50 border-b" style={{ borderColor: '#F0F0F0' }}>
@@ -120,7 +114,7 @@ export default function SearchPage({ onNavigate }) {
           <Widget title="INDUSTRY">
             <div className="space-y-0.5">
               {Object.entries(INDUSTRIES).slice(0, 6).map(([code, ind]) => {
-                const cnt = entities.filter((e) => e.industry === code).length;
+                const cnt = networkEntities.filter((e) => e.industry === code).length;
                 if (!cnt) return null;
                 return (
                   <button key={code} onClick={() => setIndFilter(indFilter === code ? null : code)}
@@ -147,7 +141,7 @@ export default function SearchPage({ onNavigate }) {
           </div>
           {filtered.map((ent) => {
             const ind = getIndustry(ent.industry);
-            const dr = selectedEntityId ? relationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
+            const dr = selectedEntityId ? networkRelationships.find((r) => (r.source === selectedEntityId && r.target === ent.id) || (r.target === selectedEntityId && r.source === ent.id)) : null;
             return (
               <div key={ent.id} onClick={() => setSelectedEntity(ent)}
                 className="p-4 bg-white border rounded-sm cursor-pointer transition-all hover:shadow-sm group"
@@ -189,9 +183,9 @@ export default function SearchPage({ onNavigate }) {
               onOpenAI={() => onNavigate('assist', selectedEntity)}
               onMerge={() => {}}
               onSelectEntity={setSelectedEntity}
-              vendorRels={relationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
-              clientRels={relationships.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
-              allEntities={entities}
+              vendorRels={networkRelationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              clientRels={networkRelationships.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              allEntities={networkEntities}
             />
           </div>
         )}

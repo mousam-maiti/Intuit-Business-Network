@@ -11,15 +11,19 @@ def list_entities(
     industry: str = Query(None),
     company_id: str = Query(None),
 ):
-    mysql = request.app.state.mysql
-    results = mysql.get_entities(q=q, industry=industry, company_id=company_id)
+    neo4j = request.app.state.neo4j
+    results = neo4j.get_entities(q=q, industry=industry, company_id=company_id)
     return {"data": results, "total": len(results)}
 
 
 @router.get("/entities/{entity_id}")
 def get_entity(request: Request, entity_id: str):
-    mysql = request.app.state.mysql
-    entity = mysql.get_entity(entity_id)
+    neo4j = request.app.state.neo4j
+    entity = neo4j.get_entity(entity_id)
+    if not entity:
+        # Fallback to MySQL for company entities (source data)
+        mysql = request.app.state.mysql
+        entity = mysql.get_company(entity_id)
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"data": entity}
@@ -27,8 +31,8 @@ def get_entity(request: Request, entity_id: str):
 
 @router.patch("/entities/{entity_id}")
 def patch_entity(request: Request, entity_id: str, body: dict):
-    mysql = request.app.state.mysql
-    entity = mysql.patch_entity(entity_id, body)
+    neo4j = request.app.state.neo4j
+    entity = neo4j.patch_entity(entity_id, body)
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"data": entity}

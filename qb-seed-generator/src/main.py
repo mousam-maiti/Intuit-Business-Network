@@ -25,6 +25,9 @@ def cmd_generate():
     from src.generators.pools import generate_vendor_pool, generate_client_pool
     from src.generators.assignments import generate_assignments
     from src.generators.transactions import generate_transactions
+    from src.generators.supply_chain import (
+        INTER_COMPANY_EDGES, build_intercompany_pool_entries,
+    )
     from src.output import write_all
 
     random.seed(cfg.RANDOM_SEED)
@@ -36,6 +39,7 @@ def cmd_generate():
     print(f"  Vendor pool:    {cfg.VENDOR_POOL_SIZE}")
     print(f"  Client pool:    {cfg.CLIENT_POOL_SIZE}")
     print(f"  QB accounts:    {cfg.QB_ACCOUNT_COUNT}")
+    print(f"  IC edges:       {len(INTER_COMPANY_EDGES)} inter-company supply chain links")
     print(f"  Name variation: {cfg.NAME_VARIATION_PROB:.0%}")
     print(f"  Transactions:   {cfg.TXN_START} → {cfg.TXN_END}")
     print(f"  Output:         {cfg.SEED_DIR}")
@@ -52,16 +56,22 @@ def cmd_generate():
     company_ids = [c["company_id"] for c in companies]
     print(f"\nStep 2: Using {len(companies)} QB accounts")
 
-    # Step 3: Assign pools to accounts with variations
+    # Step 3: Assign pools to accounts with variations (includes IC Phase 0)
     print("\nStep 3: Assigning pools to accounts...")
     vendor_records, customer_records, assignment_map = generate_assignments(
         vendor_pool, client_pool, company_ids
     )
-    print(f"  {len(vendor_records)} vendor records, {len(customer_records)} customer records")
+    ic_vendor_count = sum(1 for r in vendor_records if r.get("is_intercompany"))
+    print(f"  {len(vendor_records)} vendor records ({ic_vendor_count} inter-company), "
+          f"{len(customer_records)} customer records")
 
     # Step 4: Generate transactions
+    # Merge IC pool entries into vendor_pool_map so bill line items get
+    # appropriate categories (e.g. Plumbing, Electrical, HVAC)
     print("\nStep 4: Generating transactions...")
     vendor_pool_map = {v["serial_id"]: v for v in vendor_pool}
+    for ic_entry in build_intercompany_pool_entries():
+        vendor_pool_map[ic_entry["serial_id"]] = ic_entry
     bills, bill_li, invoices, invoice_li, payments = generate_transactions(
         vendor_records, customer_records, vendor_pool_map
     )

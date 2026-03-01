@@ -12,6 +12,12 @@ This is what creates the entity resolution challenge:
 import random
 from src.config import cfg
 from src.generators.variations import generate_variation
+from src.generators.supply_chain import (
+    build_intercompany_pool_entries,
+    get_intercompany_assignments,
+    get_buyer_ic_count,
+    IC_CATEGORY_MAP,
+)
 
 
 _HUB_PRIORITY = {"high": 0, "medium": 1, "low": 2}
@@ -123,6 +129,51 @@ def _build_record(pool_entry, company_id, is_vendor):
     return record
 
 
+def _build_ic_record(pool_entry, company_id, vendor_id):
+    """Build a vendor record for an inter-company relationship.
+
+    Higher field fill rates than regular vendors (EIN at 75%, others elevated)
+    since companies know more about other companies they work with directly.
+    """
+    canonical = pool_entry["canonical_name"]
+    city = pool_entry["city"]
+
+    # IC vendors still get name variations (companies type names differently)
+    if random.random() < cfg.NAME_VARIATION_PROB:
+        display_name = generate_variation(canonical, city)
+    else:
+        display_name = canonical
+
+    record = {
+        "company_id": company_id,
+        "pool_serial_id": pool_entry["serial_id"],
+        "is_intercompany": True,
+
+        "display_name": display_name,
+        "ein": pool_entry["ein"],
+        "contact_name": pool_entry.get("contact_name"),
+        "email": pool_entry.get("email"),
+        "phone": pool_entry.get("phone"),
+
+        "category": pool_entry.get("category"),
+        "commodity": None,
+
+        "street_address": pool_entry.get("street_address"),
+        "city": pool_entry["city"],
+        "state": pool_entry["state"],
+        "zip": pool_entry.get("zip"),
+
+        "website": pool_entry.get("website") if random.random() < 0.30 else None,
+        "expected_volume": None,
+        "payment_terms": pool_entry.get("payment_terms"),
+
+        "is_active": True,
+        "vendor_id": vendor_id,
+    }
+
+    return record
+
+
 def generate_assignments(vendor_pool, client_pool, company_ids):
     """Generate vendor and customer records for all QB accounts.
 
@@ -140,7 +191,21 @@ def generate_assignments(vendor_pool, client_pool, company_ids):
 
     targets = cfg.COMPANY_TARGETS  # {cid: (vendors, customers)} or None
 
-    # ── Assign vendors ──
+    # ── Phase 0: Inter-company vendor records ──
+    ic_pool_entries = build_intercompany_pool_entries()
+    ic_assignments = get_intercompany_assignments()
+    ic_buyer_counts = get_buyer_ic_count()
+    ic_pool_map = {e["serial_id"]: e for e in ic_pool_entries}
+
+    for serial_id, buyer_ids in ic_assignments.items():
+        pool_entry = ic_pool_map[serial_id]
+        assignment_map["vendors"][serial_id] = buyer_ids
+        for cid in buyer_ids:
+            rec = _build_ic_record(pool_entry, cid, vendor_id_counter)
+            vendor_id_counter += 1
+            vendor_records.append(rec)
+
+    # ── Assign vendors (pool — deducting IC counts from targets) ──
     # First pass: hub-based initial assignment
     vendor_account_map = {}  # serial_id → [company_ids]
     for v in vendor_pool:
@@ -148,19 +213,21 @@ def generate_assignments(vendor_pool, client_pool, company_ids):
         vendor_account_map[v["serial_id"]] = accounts
 
     # Second pass: enforce exact targets or ensure minimums
+    # Deduct IC vendor count so total (IC + pool) matches configured targets
     if targets:
         for cid in company_ids:
-            vendor_target = targets[cid][0]
+            pool_vendor_target = targets[cid][0] - ic_buyer_counts.get(cid, 0)
+            pool_vendor_target = max(pool_vendor_target, 0)
             current = sum(1 for accts in vendor_account_map.values() if cid in accts)
-            if current > vendor_target:
-                _trim_to_target(vendor_account_map, vendor_pool, cid, current - vendor_target)
-            elif current < vendor_target:
-                _pad_to_target(vendor_account_map, vendor_pool, cid, vendor_target - current)
+            if current > pool_vendor_target:
+                _trim_to_target(vendor_account_map, vendor_pool, cid, current - pool_vendor_target)
+            elif current < pool_vendor_target:
+                _pad_to_target(vendor_account_map, vendor_pool, cid, pool_vendor_target - current)
     else:
-        # Backwards compatible: ensure minimums via padding
+        # Backwards compatible: ensure minimums via padding (IC count deducted)
         for cid in company_ids:
             current = sum(1 for accts in vendor_account_map.values() if cid in accts)
-            needed = cfg.VENDORS_PER_ACCOUNT_MIN
+            needed = max(cfg.VENDORS_PER_ACCOUNT_MIN - ic_buyer_counts.get(cid, 0), 0)
             if current < needed:
                 candidates = [
                     v for v in vendor_pool
@@ -170,7 +237,7 @@ def generate_assignments(vendor_pool, client_pool, company_ids):
                 for v in candidates[:needed - current]:
                     vendor_account_map[v["serial_id"]].append(cid)
 
-    # Second pass: generate records
+    # Third pass: generate records
     for v in vendor_pool:
         accounts = vendor_account_map[v["serial_id"]]
         assignment_map["vendors"][v["serial_id"]] = accounts

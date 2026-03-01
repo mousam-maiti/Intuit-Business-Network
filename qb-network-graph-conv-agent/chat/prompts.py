@@ -5,7 +5,7 @@ ReAct system prompt, tool name registry, and utility prompts.
 REACT_SYSTEM_PROMPT = """You are Intuit Assist, an AI assistant for exploring the QuickBooks Business Network Graph.
 
 You help users discover entities, relationships, trends, and risks in their business network.
-You have access to 9 tools that query the network graph. Use them to answer user questions accurately.
+You have access to 15 tools that query the network graph. Use them to answer user questions accurately.
 
 ## Protocol — ReAct (Reasoning + Acting)
 
@@ -74,6 +74,28 @@ Arguments: {"entity_a_id": str, "known_counterparties": [str]}
 Batch-compare a reference NAICS code against multiple candidates in ONE call. Use this instead of calling query_ontology repeatedly for each vendor. Checks industry hierarchy, commodity taxonomy, and same-sector matches all at once.
 Arguments: {"reference_naics": str, "candidates": [{"naics_code": str, "name": str, "golden_record_id"?: str, ...}]}
 
+### 11. traverse_supply_chain
+Directed multi-hop supply chain traversal. Use for questions like "show my vendor's clients", "trace 3 levels deep", "find circular dependencies", "who do my vendors sell to?".
+Each hop specifies a direction: "vendor" follows BUYS_FROM edges, "client" follows SELLS_TO edges.
+Examples: ["vendor"] = 1-hop vendors, ["vendor", "client"] = vendor's other clients, ["vendor", "client", "vendor"] = full supply chain loop.
+Arguments: {"start_entity_id": str, "hops": [str], "max_per_hop"?: int (default 5), "min_volume"?: float (default 0)}
+
+### 12. find_shortest_path
+Find the shortest connection path between any two entities in the network.
+Arguments: {"entity_a": str, "entity_b": str}
+
+### 13. find_common_neighbors
+Find entities that are direct transaction partners of BOTH given entities.
+Arguments: {"entity_a_id": str, "entity_b_id": str, "limit"?: int (default 20)}
+
+### 14. detect_cluster
+Discover the business cluster (tightly connected subgroup) around an entity.
+Arguments: {"entity_id": str, "max_size"?: int (default 20)}
+
+### 15. assess_risk_impact
+Analyze downstream impact if an entity were to disappear from the network.
+Arguments: {"entity_id": str, "max_depth"?: int (default 3)}
+
 ## Ontology Usage Patterns
 
 Use ontology tools to add depth to your analysis:
@@ -88,6 +110,19 @@ Use ontology tools to add depth to your analysis:
 - **Risk analysis**: When evaluating vendor risk, chain describe_entity → query_ontology → check_shared_context to build a complete picture of how entities relate.
 - **"Are X and Y related?"**: Use query_ontology with their NAICS codes. If cross-taxonomy links exist, explain the commodity connection.
 - **Geo analysis**: Use query_ontology(GEO_CONTAINMENT) to check if two geographic codes are related.
+
+- **Supply chain traversal** ("show me my vendor's clients", "trace supply chain", "who supplies my suppliers?"): Use traverse_supply_chain with appropriate hops. Common patterns:
+  - "My vendors" → hops: ["vendor"]
+  - "My vendor's other clients" → hops: ["vendor", "client"]
+  - "Do my vendor's clients use the same suppliers I do?" → hops: ["vendor", "client", "vendor"] then check insights.shared_entities
+  - "Full supply chain 3 levels" → hops: ["vendor", "client", "vendor"] or ["vendor", "vendor", "vendor"]
+
+## Graph Analysis Patterns
+
+- **"How is X connected to Y?"**: Use find_shortest_path. If entities are given by name, first use search_entities to resolve IDs.
+- **"What do X and Y have in common?"**: Use find_common_neighbors. Show shared partners in a table with relationship types and volumes.
+- **"Show me the cluster around X"**: Use detect_cluster. Present as network graph (entities array) with density score and top industries signal.
+- **"If X goes down, who is affected?"**: Use assess_risk_impact. Show affected entities by depth in a table, total volume at risk as score, concentration warning as signal.
 
 IMPORTANT: Always prefer semantic search (search_entities) over keyword matching. When filtering connections by industry, use batch_industry_filter to check all candidates at once — NEVER call query_ontology in a loop.
 
@@ -126,7 +161,9 @@ TOOL_NAMES = {
     "search_entities", "describe_entity", "query_network",
     "aggregate_stats", "search_by_relationship", "get_merge_history",
     "get_company_connections", "query_ontology", "check_shared_context",
-    "batch_industry_filter",
+    "batch_industry_filter", "traverse_supply_chain",
+    "find_shortest_path", "find_common_neighbors", "detect_cluster",
+    "assess_risk_impact",
 }
 
 COMPRESSION_PROMPT = """Summarize the following conversation history into a concise context summary.
@@ -159,4 +196,9 @@ TOOL_LABELS = {
     "query_ontology": "Querying ontology",
     "check_shared_context": "Analyzing shared context",
     "batch_industry_filter": "Filtering by industry",
+    "traverse_supply_chain": "Tracing supply chain",
+    "find_shortest_path": "Finding shortest path",
+    "find_common_neighbors": "Finding common neighbors",
+    "detect_cluster": "Detecting business cluster",
+    "assess_risk_impact": "Analyzing risk impact",
 }

@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import load_config
 from clients.mysql_client import MySQLClient
+from clients.neo4j_client import Neo4jReadClient
 
 # ── Routes ───────────────────────────────────────────────
 
@@ -38,7 +39,10 @@ async def lifespan(app: FastAPI):
     cfg = load_config()
     mysql = MySQLClient(cfg.mysql)
     await mysql.connect()
+    neo4j = Neo4jReadClient(cfg.neo4j)
+    await neo4j.connect()
     app.state.mysql = mysql
+    app.state.neo4j = neo4j
     app.state.cfg = cfg
     app.state.http_client = httpx.AsyncClient(
         base_url=cfg.entity_agent.url,
@@ -47,11 +51,13 @@ async def lifespan(app: FastAPI):
     logger.info(
         f"QB Network Graph BE started  "
         f"MySQL={cfg.mysql.host}:{cfg.mysql.port}/{cfg.mysql.database}  "
+        f"Neo4j={cfg.neo4j.uri}  "
         f"EntityAgent={cfg.entity_agent.url}  "
         f"port={cfg.server.port}"
     )
     yield
     await app.state.http_client.aclose()
+    await neo4j.close()
     await mysql.close()
 
 

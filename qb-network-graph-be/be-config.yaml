@@ -12,6 +12,13 @@ mysql:
   database: quickbooks
   pool_size: 5
 
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: neo4j
+  password: neo4j_pass
+  database: neo4j
+  max_pool_size: 10
+
 entity_agent:
   url: "http://localhost:8085"
   timeout: 30

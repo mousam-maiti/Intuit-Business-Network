@@ -62,3 +62,9 @@ databaseChangeLog:
   # --- Schema fixes ---
   - include:
       file: changelog/versions/0019-alter-pending-resolution-trigger-type.yaml
+  - include:
+      file: changelog/versions/0020-widen-entity-id-columns.yaml
+
+  # --- Neo4j migration: drop MySQL golden record FK constraints ---
+  - include:
+      file: changelog/versions/0021-drop-pending-resolution-fks.yaml

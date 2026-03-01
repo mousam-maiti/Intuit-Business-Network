@@ -11,12 +11,13 @@ import os
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import AgentConfig, MySQLConfig, MilvusConfig, EmbeddingConfig, LLMConfig, KnowledgeGraphConfig
+from config import AgentConfig, MySQLConfig, MilvusConfig, EmbeddingConfig, LLMConfig, Neo4jConfig, RedisConfig
 from clients.mysql_client import MySQLClient
 from clients.milvus_client import MilvusClient
-from clients.graphdb_client import GraphDBClient
 from clients.embedding_client import EmbeddingClient
 from clients.llm_client import LLMClient
+from clients.neo4j_client import Neo4jClient
+from clients.redis_client import RedisClient
 from app import AppContext
 from models.persona import (
     ClassifiedPersona, IdentityDimension, IndustryDimension,
@@ -50,9 +51,17 @@ def milvus_client(config):
 
 
 @pytest.fixture
-def graphdb_client(config):
-    """GraphDB client — unavailable (no real GraphDB in tests)."""
-    client = GraphDBClient(config.knowledge_graph)
+def neo4j_client(config):
+    """Neo4j client in mock mode (in-memory dict)."""
+    client = Neo4jClient(config.neo4j)
+    client._using_mock = True
+    return client
+
+
+@pytest.fixture
+def redis_client(config):
+    """Redis client — unavailable (no real Redis in tests)."""
+    client = RedisClient(config.redis)
     return client
 
 
@@ -71,15 +80,16 @@ def llm_client(config):
 
 
 @pytest.fixture
-def app_context(config, mysql_client, milvus_client, graphdb_client, embedding_client, llm_client):
+def app_context(config, mysql_client, milvus_client, neo4j_client, redis_client, embedding_client, llm_client):
     """Full AppContext with mock clients."""
     return AppContext(
         config=config,
         mysql=mysql_client,
         milvus=milvus_client,
-        graphdb=graphdb_client,
         embedding=embedding_client,
         llm=llm_client,
+        neo4j=neo4j_client,
+        redis=redis_client,
     )
 
 
@@ -121,7 +131,7 @@ def sample_persona():
 
 @pytest.fixture
 def sample_golden_record(sample_persona):
-    """A sample golden record seeded in MySQL mock."""
+    """A sample golden record seeded in Neo4j mock."""
     return GoldenRecord(
         golden_record_id="G-test0001",
         canonical_name="Bob's Plumbing LLC",
@@ -137,7 +147,7 @@ def sample_golden_record(sample_persona):
 
 
 @pytest.fixture
-def seeded_mysql(mysql_client, sample_golden_record):
-    """MySQL client with a sample golden record pre-seeded."""
-    mysql_client.write_golden_record(sample_golden_record)
-    return mysql_client
+def seeded_neo4j(neo4j_client, sample_golden_record):
+    """Neo4j client with a sample golden record pre-seeded."""
+    neo4j_client.upsert_entity(sample_golden_record.model_dump())
+    return neo4j_client
