@@ -823,9 +823,9 @@ class Neo4jClient:
             params = {"id": company_id, "limit": limit}
         elif connection_type == "customer":
             cypher = f"""
-            MATCH (cust:Entity)-[r:BUYS_FROM]->(c:Entity {{id: $id}})
+            MATCH (c:Entity {{id: $id}})-[r:SELLS_TO]->(cust:Entity)
             WHERE cust.status IN ['ACTIVE', 'PROVISIONAL']
-            RETURN r.edge_id AS edge_id, cust.id AS source_entity_id, c.id AS target_entity_id,
+            RETURN r.edge_id AS edge_id, c.id AS source_entity_id, cust.id AS target_entity_id,
                    r.volume AS transaction_volume, r.count AS transaction_count,
                    cust.canonical_name AS canonical_name, cust.state AS state, cust.city AS city,
                    cust.naics_code AS naics_code, cust.confidence AS confidence,

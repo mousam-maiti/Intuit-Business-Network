@@ -195,14 +195,13 @@ async def merge_into_golden_record(
 
     app.neo4j.upsert_entity(gr.model_dump())
 
-    # Relationship edge: vendor = company→entity, customer = entity→company
+    # Relationship edge: company is always the source
+    #   vendor:   Company -[:BUYS_FROM]-> Vendor
+    #   customer: Company -[:SELLS_TO]-> Customer
     relationship = None
     if company_id is not None:
-        if record_type == "customer":
-            _ensure_company_golden_record(app, company_id)
-            src, tgt = gr.golden_record_id, str(company_id)
-        else:
-            src, tgt = str(company_id), gr.golden_record_id
+        _ensure_company_golden_record(app, company_id)
+        src, tgt = str(company_id), gr.golden_record_id
         edge_id = app.neo4j.generate_id("E")
         volume = _get_volume(persona)
         count = _get_txn_count(persona)
@@ -285,13 +284,11 @@ async def create_golden_record(
     app.neo4j.upsert_entity(gr.model_dump())
 
     # Relationship edge: vendor = company→entity, customer = entity→company
+    # Relationship edge: company is always the source
     relationship = None
     if company_id is not None:
-        if record_type == "customer":
-            _ensure_company_golden_record(app, company_id)
-            src, tgt = gr_id, str(company_id)
-        else:
-            src, tgt = str(company_id), gr_id
+        _ensure_company_golden_record(app, company_id)
+        src, tgt = str(company_id), gr_id
         edge_id = app.neo4j.generate_id("E")
         volume = _get_volume(persona)
         count = _get_txn_count(persona)
@@ -388,13 +385,11 @@ async def submit_for_review(
     app.mysql.write_pending_resolution(pending)
 
     # Relationship edge: vendor = company→entity, customer = entity→company
+    # Relationship edge: company is always the source
     relationship = None
     if company_id is not None:
-        if record_type == "customer":
-            _ensure_company_golden_record(app, company_id)
-            src, tgt = prov_id, str(company_id)
-        else:
-            src, tgt = str(company_id), prov_id
+        _ensure_company_golden_record(app, company_id)
+        src, tgt = str(company_id), prov_id
         edge_id = app.neo4j.generate_id("E")
         volume = _get_volume(persona)
         count = _get_txn_count(persona)
