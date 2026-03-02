@@ -6,6 +6,11 @@ databaseChangeLog:
         Golden records now live in Neo4j (primary store), not MySQL.
         Drop FK constraints from pending_resolution → golden_records
         since golden_records table is no longer populated.
+      preConditions:
+        - onFail: MARK_RAN
+        - foreignKeyConstraintExists:
+            foreignKeyName: fk_pending_orphan
+            foreignKeyTableName: pending_resolution
       changes:
         - dropForeignKeyConstraint:
             baseTableName: pending_resolution

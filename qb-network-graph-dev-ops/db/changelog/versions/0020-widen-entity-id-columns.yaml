@@ -5,6 +5,15 @@ databaseChangeLog:
       comment: >
         Widen golden_record_id and relationship entity ID columns from VARCHAR(36) to VARCHAR(40)
         to accommodate G-{uuid5} format (38 chars) used by the seed generator.
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: varchar(36)
+            sql: >
+              SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+              WHERE TABLE_SCHEMA = 'quickbooks'
+                AND TABLE_NAME = 'golden_records'
+                AND COLUMN_NAME = 'golden_record_id'
       changes:
         - modifyDataType:
             tableName: golden_records

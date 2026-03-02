@@ -227,50 +227,52 @@ class MySQLClient:
     # PENDING RESOLUTION (OLTP work queue)
     # ═══════════════════════════════════════════════════════════
 
-    def get_pending_matches(self) -> list[dict]:
-        """Pending matches with orphan/candidate data.
+    def get_pending_matches(self, neo4j_client=None) -> list[dict]:
+        """Pending matches enriched with entity data from Neo4j.
 
-        Note: This still reads from golden_records + pending_resolution via MySQL.
-        Transitional until pending_resolution is fully decoupled from golden_records.
+        Reads pending_resolution work queue from MySQL, then looks up
+        orphan and candidate entities from Neo4j (primary golden record store).
         """
         with self._get_conn() as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute("""
-                SELECT pr.*,
-                       og.canonical_name AS orphan_name,
-                       og.naics_code AS orphan_naics,
-                       og.city AS orphan_city,
-                       og.state AS orphan_state
-                FROM pending_resolution pr
-                LEFT JOIN golden_records og
-                    ON pr.orphan_golden_id = og.golden_record_id
-                WHERE pr.status = 'PENDING'
-                ORDER BY pr.created_at DESC
+                SELECT *
+                FROM pending_resolution
+                WHERE status = 'PENDING'
+                ORDER BY created_at DESC
             """)
             pending_rows = cursor.fetchall()
 
         results = []
         for pr in pending_rows:
+            orphan_entity = None
             candidate_entity = None
+            oid = pr.get("orphan_golden_id")
             cid = pr.get("candidate_golden_id")
-            if cid:
-                candidate_entity = self._get_entity_for_pending(cid)
+
+            if neo4j_client and neo4j_client.available:
+                if oid:
+                    orphan_entity = neo4j_client.get_entity(oid)
+                if cid:
+                    candidate_entity = neo4j_client.get_entity(cid)
 
             dim_scores = _parse_json(pr.get("dimension_scores")) or {}
             if "identity" in dim_scores:
                 dim_scores["name"] = dim_scores.pop("identity")
-            orphan_city = pr.get("orphan_city") or ""
-            orphan_state = pr.get("orphan_state") or ""
+
+            orphan_city = (orphan_entity or {}).get("city", "")
+            orphan_state = (orphan_entity or {}).get("state", "")
             location = f"{orphan_city}, {orphan_state}".strip(", ")
 
             shared = []
-            if cid and pr.get("orphan_golden_id"):
-                shared = self._get_shared_neighbors(pr["orphan_golden_id"], cid)
+            if neo4j_client and neo4j_client.available and oid and cid:
+                shared = neo4j_client.get_common_neighbors(oid, cid).get("common_neighbors", [])
+                shared = [n.get("name", "") for n in shared[:5]]
 
             results.append({
                 "id": pr.get("match_id"),
-                "inputName": pr.get("orphan_name"),
-                "inputCategory": pr.get("orphan_naics"),
+                "inputName": (orphan_entity or {}).get("name"),
+                "inputCategory": (orphan_entity or {}).get("naics"),
                 "inputLocation": location or None,
                 "candidate": candidate_entity,
                 "confidence": float(pr["confidence"]) if pr.get("confidence") is not None else None,
@@ -280,69 +282,6 @@ class MySQLClient:
                 "triggerType": pr.get("trigger_type", "AI_AGENT"),
             })
         return results
-
-    def _get_entity_for_pending(self, entity_id: str) -> dict | None:
-        """Read a golden record for pending match display (transitional)."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                "SELECT * FROM golden_records WHERE golden_record_id = %s",
-                (entity_id,),
-            )
-            row = cursor.fetchone()
-        if not row:
-            return None
-        persona = _parse_json(row.get("persona")) or {}
-        identity = persona.get("identity", {}) if isinstance(persona, dict) else {}
-        name_variants = _parse_json(row.get("name_variants")) or []
-        commodities = _parse_json(row.get("commodity_keywords")) or []
-        return {
-            "id": row.get("golden_record_id"),
-            "name": row.get("canonical_name"),
-            "ein": _format_ein(row.get("ein")),
-            "contactName": row.get("contact_name"),
-            "email": row.get("email"),
-            "phone": _format_phone(row.get("phone_digits")),
-            "website": identity.get("website"),
-            "industry": row.get("naics_code"),
-            "naics": row.get("naics_code"),
-            "legalStructure": identity.get("legal_structure"),
-            "address": row.get("street_address"),
-            "city": row.get("city"),
-            "state": row.get("state"),
-            "zip": row.get("zip5"),
-            "confidence": float(row["confidence"]) if row.get("confidence") is not None else None,
-            "vendors": 0,
-            "clients": 0,
-            "volume": float(row["total_volume"]) if row.get("total_volume") is not None else 0,
-            "variants": name_variants if isinstance(name_variants, list) else [],
-            "commodities": commodities if isinstance(commodities, list) else [],
-        }
-
-    def _get_shared_neighbors(self, id_a: str, id_b: str) -> list[str]:
-        """Find entity names connected to both id_a and id_b (transitional)."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT DISTINCT gr.canonical_name
-                FROM relationships r1
-                JOIN relationships r2 ON (
-                    (r1.target_entity_id = r2.target_entity_id AND r1.target_entity_id != %s AND r1.target_entity_id != %s)
-                    OR (r1.source_entity_id = r2.source_entity_id AND r1.source_entity_id != %s AND r1.source_entity_id != %s)
-                    OR (r1.target_entity_id = r2.source_entity_id AND r1.target_entity_id != %s AND r1.target_entity_id != %s)
-                )
-                JOIN golden_records gr ON gr.golden_record_id = COALESCE(
-                    CASE WHEN r1.target_entity_id NOT IN (%s, %s) THEN r1.target_entity_id END,
-                    CASE WHEN r1.source_entity_id NOT IN (%s, %s) THEN r1.source_entity_id END
-                )
-                WHERE (r1.source_entity_id = %s OR r1.target_entity_id = %s)
-                  AND (r2.source_entity_id = %s OR r2.target_entity_id = %s)
-                LIMIT 5
-            """, (id_a, id_b, id_a, id_b, id_a, id_b,
-                  id_a, id_b, id_a, id_b,
-                  id_a, id_a, id_b, id_b))
-            rows = cursor.fetchall()
-        return [r["canonical_name"] for r in rows if r.get("canonical_name")]
 
     def resolve_match(self, match_id: str, resolution: str) -> dict:
         """Accept or reject a pending match.

@@ -77,8 +77,8 @@ export default function ReviewPage() {
               </div>
               <div className="p-3 rounded" style={{ backgroundColor: QB.purpleLight }}>
                 <div className="text-[10px] font-semibold tracking-wider mb-1" style={{ color: QB.purpleDark, letterSpacing: '0.08em' }}>CANDIDATE</div>
-                <div className="text-sm font-medium" style={{ color: QB.textPrimary }}>{m.candidate.name}</div>
-                <div className="text-xs" style={{ color: QB.textMuted }}>{getIndustry(m.candidate.industry).label} &middot; {m.candidate.city}, {m.candidate.state}</div>
+                <div className="text-sm font-medium" style={{ color: QB.textPrimary }}>{m.candidate?.name || 'Unknown'}</div>
+                <div className="text-xs" style={{ color: QB.textMuted }}>{getIndustry(m.candidate?.industry).label} &middot; {m.candidate?.city || '?'}, {m.candidate?.state || '?'}</div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4 mb-3">
@@ -110,7 +110,7 @@ export default function ReviewPage() {
             {resolved.map((r, i) => (
               <div key={i} className="flex items-center gap-2 py-1.5 text-xs" style={{ color: QB.textMuted }}>
                 {r.action === 'merged' ? <Check size={12} style={{ color: QB.green }} /> : <XCircle size={12} style={{ color: '#DC2626' }} />}
-                <span style={{ color: QB.textSecondary }}>{r.action === 'merged' ? 'Merged' : 'Rejected'}: {r.inputName} &#x2194; {r.candidate.name}</span>
+                <span style={{ color: QB.textSecondary }}>{r.action === 'merged' ? 'Merged' : 'Rejected'}: {r.inputName || 'Unknown'} &#x2194; {r.candidate?.name || 'Unknown'}</span>
                 <span className="ml-auto">{r.at}</span>
               </div>
             ))}

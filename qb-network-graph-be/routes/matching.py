@@ -9,7 +9,8 @@ router = APIRouter()
 @router.get("/matching/pending")
 def get_pending_matches(request: Request):
     mysql = request.app.state.mysql
-    matches = mysql.get_pending_matches()
+    neo4j = request.app.state.neo4j
+    matches = mysql.get_pending_matches(neo4j_client=neo4j)
     return {"data": matches}
 
 

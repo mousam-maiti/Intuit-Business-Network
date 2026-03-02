@@ -5,6 +5,12 @@ databaseChangeLog:
       comment: >
         Add trigger_type column to pending_resolution.
         MCP entity_writer_tools.submit_for_review writes this field.
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - columnExists:
+                tableName: pending_resolution
+                columnName: trigger_type
       changes:
         - addColumn:
             tableName: pending_resolution

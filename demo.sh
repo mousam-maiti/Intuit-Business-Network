@@ -483,8 +483,10 @@ wait_for_port 8083 "MCP Server" 30 || fail "MCP Server did not start"
 # Entity Agent (port 8085) — must be up before Classifier
 info "Starting Entity Agent on :8085..."
 cd "$ROOT/qb-network-graph-entity-agent"
+source venv/bin/activate 2>/dev/null || true
 nohup python main.py > /tmp/qb-entity-agent.log 2>&1 &
 echo "$!" >> "$PIDS_FILE"
+deactivate 2>/dev/null || true
 cd "$ROOT"
 wait_for_health "http://localhost:8085/health" "Entity Agent" 30 || fail "Entity Agent did not start"
 
