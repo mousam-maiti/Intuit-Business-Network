@@ -22,11 +22,6 @@ export function AIChatInput({ input, setInput, send }) {
           <Send size={14} /> Send
         </button>
       </div>
-      <div className="flex items-center gap-3 mt-2 text-[10px]" style={{ color: QB.textMuted }}>
-        <span>Powered by 6 MCP tool servers</span>
-        <span>&middot;</span>
-        <span>Agent Gateway + LLM orchestration</span>
-      </div>
     </div>
   );
 }

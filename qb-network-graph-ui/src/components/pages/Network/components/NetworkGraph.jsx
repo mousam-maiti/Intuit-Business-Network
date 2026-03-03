@@ -109,11 +109,13 @@ const CLIENT_COLOR = QB.cyan || '#0284c7';
 export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode, onPathSelect, edgeFilter, showDormant, nativeOverrides = {}, nativeMerges = [], allEntities = [], allRelationships = [], supplyChainNodes = null }) {
   const [hNode, setHNode] = useState(null);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const svgRef = useRef(null);
+  const dragRef = useRef(null);
 
   const zoomIn = useCallback(() => setZoom(z => Math.min(z * 1.25, 4)), []);
   const zoomOut = useCallback(() => setZoom(z => Math.max(z / 1.25, 0.25)), []);
-  const zoomReset = useCallback(() => setZoom(1), []);
+  const zoomReset = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -174,6 +176,32 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
     };
   }, [positions]);
 
+  // Pan handlers (depend on vb and zoom)
+  const handleMouseDown = useCallback((e) => {
+    if (e.button !== 0) return;
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startPan: { ...pan }, dragged: false };
+  }, [pan]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (!dragRef.current.dragged && Math.abs(dx) + Math.abs(dy) < 4) return;
+    dragRef.current.dragged = true;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const vbW = vb.w / zoom;
+    const vbH = vb.h / zoom;
+    const svgDx = dx * (vbW / rect.width);
+    const svgDy = dy * (vbH / rect.height);
+    setPan({ x: dragRef.current.startPan.x - svgDx, y: dragRef.current.startPan.y - svgDy });
+  }, [zoom, vb]);
+
+  const handleMouseUp = useCallback(() => {
+    dragRef.current = null;
+  }, []);
+
   // Hovered node's neighbors
   const hoverNeighbors = useMemo(() => {
     if (!hNode) return null;
@@ -198,8 +226,9 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
   return (
     <div className="graph-container">
       <svg ref={svgRef} onWheel={handleWheel}
-        viewBox={`${vb.x + vb.w * (1 - 1 / zoom) / 2} ${vb.y + vb.h * (1 - 1 / zoom) / 2} ${vb.w / zoom} ${vb.h / zoom}`}
-        className="w-full h-full" style={{ background: '#FAFBFC' }}>
+        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
+        viewBox={`${vb.x + vb.w * (1 - 1 / zoom) / 2 + pan.x} ${vb.y + vb.h * (1 - 1 / zoom) / 2 + pan.y} ${vb.w / zoom} ${vb.h / zoom}`}
+        className="w-full h-full" style={{ background: '#FAFBFC', cursor: dragRef.current ? 'grabbing' : 'grab' }}>
         <defs>
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="1" stdDeviation="2" floodOpacity="0.1" />
