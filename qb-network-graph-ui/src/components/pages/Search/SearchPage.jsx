@@ -181,6 +181,7 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
               nativeOverride={nativeOverrides[selectedEntity.id] || null}
               onSaveNative={handleSaveNative}
               onOpenAI={() => onNavigate('assist', selectedEntity)}
+              onShowOnNetwork={() => onNavigate('network', selectedEntity)}
               onMerge={() => {}}
               onSelectEntity={setSelectedEntity}
               vendorRels={networkRelationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}

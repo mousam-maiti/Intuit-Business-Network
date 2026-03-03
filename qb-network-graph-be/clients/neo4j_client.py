@@ -767,8 +767,7 @@ class Neo4jReadClient:
             MATCH (a:AuditEntry)
             WITH DISTINCT a.target_golden_id AS gid
             MATCH (e:Entity {id: gid})
-            WHERE e.status = 'ACTIVE'
-            RETURN e.id AS id, e.canonical_name AS name, e.naics_code AS industry
+            RETURN e.id AS id, e.canonical_name AS name, e.naics_code AS industry, e.status AS status
             ORDER BY e.canonical_name
         """
         return self._run(cypher)

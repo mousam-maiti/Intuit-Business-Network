@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network } from 'lucide-react';
+import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network, Share2 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
@@ -341,7 +341,7 @@ function EntityEditMode({ globalEntity, nativeOverride, onSave, onCancel }) {
 
 function EntityViewMode({
   globalEntity, nativeOverride, entity, onOpenAI, onEdit, onMerge,
-  onSelectEntity, onTraceSupplyChain, vendorRels, clientRels, allEntities,
+  onSelectEntity, onTraceSupplyChain, onShowOnNetwork, vendorRels, clientRels, allEntities,
 }) {
   const [showProfile, setShowProfile] = useState(false);
 
@@ -531,6 +531,13 @@ function EntityViewMode({
           style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>
           <Sparkles size={11} /> Ask Intuit Assist
         </button>
+        {onShowOnNetwork && (
+          <button onClick={() => onShowOnNetwork(entity)}
+            className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-gray-50"
+            style={{ borderColor: QB.cardBorder, color: QB.textSecondary }}>
+            <Share2 size={11} /> Show on Network
+          </button>
+        )}
         {onTraceSupplyChain && (
           <button onClick={() => onTraceSupplyChain(entity)}
             className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-gray-50"
@@ -606,6 +613,7 @@ export function EntityDetailPanel({
   onMerge,
   onSelectEntity,
   onTraceSupplyChain,
+  onShowOnNetwork,
   vendorRels = [],
   clientRels = [],
   allEntities = [],
@@ -644,6 +652,7 @@ export function EntityDetailPanel({
       onMerge={onMerge}
       onSelectEntity={onSelectEntity}
       onTraceSupplyChain={onTraceSupplyChain}
+      onShowOnNetwork={onShowOnNetwork}
       vendorRels={vendorRels}
       clientRels={clientRels}
       allEntities={allEntities}
