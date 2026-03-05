@@ -4,8 +4,14 @@ export async function getPendingMatches() {
   return apiClient.get('/matching/pending');
 }
 
-export async function resolveMatch(matchId, resolution) {
-  return apiClient.post(`/matching/${matchId}/resolve`, { resolution });
+export async function getCandidates(matchId) {
+  return apiClient.get(`/matching/${matchId}/candidates`);
+}
+
+export async function resolveMatch(matchId, resolution, candidateGoldenId = null) {
+  const body = { resolution };
+  if (candidateGoldenId) body.candidateGoldenId = candidateGoldenId;
+  return apiClient.post(`/matching/${matchId}/resolve`, body);
 }
 
 /**

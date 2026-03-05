@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from config import load_config
 from exceptions import AppError, EntityNotFoundError, ClientUnavailableError
+from utils import telemetry
 
 # ── Repositories ─────────────────────────────────────────
 from repositories.neo4j_entity_repo import Neo4jEntityRepository
@@ -74,6 +75,15 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_config()
+
+    # ── Initialize OTEL telemetry ─────────────────────────
+    otel_active = False
+    if cfg.telemetry.enabled:
+        otel_active = telemetry.setup(
+            service_name=cfg.telemetry.service_name,
+            otlp_endpoint=cfg.telemetry.otlp_endpoint,
+            export_interval_ms=cfg.telemetry.export_interval_ms,
+        )
 
     # ── Connect MySQL ────────────────────────────────────
     mysql_pool = None
@@ -154,6 +164,7 @@ async def lifespan(app: FastAPI):
         f"MySQL={cfg.mysql.host}:{cfg.mysql.port}/{cfg.mysql.database}  "
         f"Neo4j={cfg.neo4j.uri}  "
         f"EntityAgent={cfg.entity_agent.url}  "
+        f"OTEL={'ACTIVE' if otel_active else 'disabled'}  "
         f"port={cfg.server.port}"
     )
 
@@ -170,6 +181,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="QB Network Graph API", lifespan=lifespan)
+
+# ── OTEL auto-instrumentation (must be at module level, before first request) ──
+telemetry.instrument_app(app)
 
 
 # ── Exception handlers ───────────────────────────────────

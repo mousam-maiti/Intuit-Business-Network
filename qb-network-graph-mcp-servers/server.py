@@ -31,6 +31,7 @@ import tools.entity_writer_tools   # noqa: F401 — merge_into_golden_record, cr
 import tools.search_tools          # noqa: F401 — search_entities, describe_entity, query_network, aggregate_stats, search_by_relationship, get_company_connections, get_merge_history, traverse_supply_chain
 
 from config import load_config
+from utils import telemetry
 
 logger.info("All 19 tools registered")
 
@@ -48,6 +49,10 @@ def _start_sync_api(config):
     import asyncio
 
     sync_app = FastAPI(title="MCP Sync API")
+
+    # Instrument sync app with OTEL
+    if config.telemetry.enabled:
+        telemetry.instrument_app(sync_app)
     sync_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
@@ -90,6 +95,15 @@ def _start_sync_api(config):
 def main():
     config = load_config()
 
+    # Initialize OTEL telemetry
+    otel_active = False
+    if config.telemetry.enabled:
+        otel_active = telemetry.setup(
+            service_name=config.telemetry.service_name,
+            otlp_endpoint=config.telemetry.otlp_endpoint,
+            export_interval_ms=config.telemetry.export_interval_ms,
+        )
+
     # Start sync API in background thread
     sync_thread = threading.Thread(target=_start_sync_api, args=(config,), daemon=True)
     sync_thread.start()
@@ -97,6 +111,7 @@ def main():
     logger.info(f"Starting MCP Server: {config.server.name}")
     logger.info(f"Transport: Streamable HTTP on {config.server.host}:{config.server.port}")
     logger.info(f"Sync API: HTTP on {config.server.host}:{config.server.port + 1}")
+    logger.info(f"OTEL: {'ACTIVE' if otel_active else 'disabled'}")
     logger.info("MCP Server READY")
 
     mcp.run(transport="streamable-http")

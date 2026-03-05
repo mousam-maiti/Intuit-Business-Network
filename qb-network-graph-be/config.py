@@ -81,6 +81,14 @@ class SyncConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    enabled: bool = True
+    service_name: str = "qb-backend-api"
+    otlp_endpoint: str = "http://localhost:4317"
+    export_interval_ms: int = 15000
+
+
+@dataclass
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
@@ -89,6 +97,7 @@ class AppConfig:
     flink_sql: FlinkSQLConfig = field(default_factory=FlinkSQLConfig)
     paimon: PaimonConfig = field(default_factory=PaimonConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def _build(cls, data: dict):
@@ -115,6 +124,7 @@ def load_config(path: str | None = None) -> AppConfig:
         flink_sql=_build(FlinkSQLConfig, raw.get("flink_sql")),
         paimon=_build(PaimonConfig, raw.get("paimon")),
         sync=_build(SyncConfig, raw.get("sync")),
+        telemetry=_build(TelemetryConfig, raw.get("telemetry")),
     )
 
     # Env var overrides
@@ -143,5 +153,10 @@ def load_config(path: str | None = None) -> AppConfig:
     cfg.paimon.warehouse_path = _env("PAIMON_WAREHOUSE_PATH", cfg.paimon.warehouse_path)
 
     cfg.sync.url = _env("SYNC_URL", cfg.sync.url)
+
+    # Telemetry
+    cfg.telemetry.enabled = _env("OTEL_ENABLED", cfg.telemetry.enabled, bool)
+    cfg.telemetry.service_name = _env("OTEL_SERVICE_NAME", cfg.telemetry.service_name)
+    cfg.telemetry.otlp_endpoint = _env("OTEL_EXPORTER_OTLP_ENDPOINT", cfg.telemetry.otlp_endpoint)
 
     return cfg

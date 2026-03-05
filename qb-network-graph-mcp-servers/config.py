@@ -138,6 +138,14 @@ class BucketConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    enabled: bool = True
+    service_name: str = "qb-mcp-server"
+    otlp_endpoint: str = "http://localhost:4317"
+    export_interval_ms: int = 15000
+
+
+@dataclass
 class AgentConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -149,6 +157,7 @@ class AgentConfig:
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     buckets: BucketConfig = field(default_factory=BucketConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 # ── Loader ──────────────────────────────────────────────────
@@ -175,6 +184,8 @@ def load_config(path: str | None = None) -> AgentConfig:
     bkt = raw.get("buckets", {})
     max_kw = bkt.get("max_commodity_keywords", 3)
 
+    tel_raw = raw.get("telemetry", {})
+
     cfg = AgentConfig(
         server=_build(ServerConfig, raw.get("server")),
         thresholds=_build(Thresholds, raw.get("thresholds")),
@@ -186,6 +197,7 @@ def load_config(path: str | None = None) -> AgentConfig:
         neo4j=_build(Neo4jConfig, raw.get("neo4j")),
         redis=_build(RedisConfig, raw.get("redis")),
         buckets=BucketConfig(max_commodity_keywords=max_kw),
+        telemetry=_build(TelemetryConfig, tel_raw if isinstance(tel_raw, dict) else {}),
     )
 
     # ── Env var overrides ────────────────────────────────────
@@ -245,5 +257,10 @@ def load_config(path: str | None = None) -> AgentConfig:
 
     # Buckets
     cfg.buckets.max_commodity_keywords = _env("BUCKET_MAX_COMMODITY_KEYWORDS", cfg.buckets.max_commodity_keywords, int)
+
+    # Telemetry
+    cfg.telemetry.enabled = _env("OTEL_ENABLED", cfg.telemetry.enabled, bool)
+    cfg.telemetry.service_name = _env("OTEL_SERVICE_NAME", cfg.telemetry.service_name)
+    cfg.telemetry.otlp_endpoint = _env("OTEL_EXPORTER_OTLP_ENDPOINT", cfg.telemetry.otlp_endpoint)
 
     return cfg

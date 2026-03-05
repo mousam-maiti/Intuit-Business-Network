@@ -374,13 +374,19 @@ def compute_composite(
     for dim_name, adj_weight in adjusted.items():
         composite += dimensions[dim_name].score * adj_weight
 
-    # Identity floor cap: if identity scored below 0.55 and identity data
-    # is available, cap composite at 0.70 to prevent "same industry competitor"
-    # patterns from reaching high-confidence territory.
+    # Name floor cap: if name similarity (Jaro-Winkler) is weak, cap composite
+    # to prevent "same industry + same city" patterns from inflating score.
+    # Uses name_similarity specifically — not aggregate identity score which
+    # includes EIN/phone/email signals that can mask a weak name match.
+    # Below 0.55 name_sim → cap at 0.30 (strong rejection).
+    # Below 0.75 name_sim → cap at 0.40 (forces NEW_ENTITY, skips review queue).
     identity_dim = dimensions.get("identity")
     if (identity_dim
-            and identity_dim.confidence != DimensionConfidence.INSUFFICIENT
-            and identity_dim.score < 0.55):
-        composite = min(composite, 0.70)
+            and identity_dim.confidence != DimensionConfidence.INSUFFICIENT):
+        name_sim = identity_dim.details.get("name_similarity", identity_dim.score)
+        if name_sim < 0.55:
+            composite = min(composite, 0.30)
+        elif name_sim < 0.75:
+            composite = min(composite, 0.40)
 
     return round(composite, 4), {k: round(v, 4) for k, v in adjusted.items()}, sparsity_adjusted

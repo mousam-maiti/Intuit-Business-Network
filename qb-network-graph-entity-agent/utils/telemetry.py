@@ -35,6 +35,10 @@ try:
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
     from opentelemetry.trace import StatusCode, Status
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+    from opentelemetry._logs import set_logger_provider
     HAS_OTEL = True
 except ImportError:
     HAS_OTEL = False
@@ -103,6 +107,14 @@ def setup(
         meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
         metrics.set_meter_provider(meter_provider)
         _meter = metrics.get_meter(service_name, "1.0.0")
+
+        # ── Logs — bridge Python logging to OTLP ────────────
+        log_exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
+        logger_provider = LoggerProvider(resource=resource)
+        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+        set_logger_provider(logger_provider)
+        otel_handler = LoggingHandler(level=logging.INFO, logger_provider=logger_provider)
+        logging.getLogger().addHandler(otel_handler)
 
         # ── Create instruments ──────────────────────────────
 

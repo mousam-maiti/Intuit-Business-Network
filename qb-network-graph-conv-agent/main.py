@@ -22,6 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import load_config
+from utils import telemetry
 from clients.mcp_client import MCPToolClient
 from clients.chat_db import ChatDB, MockChatDB
 from chat.session import SessionManager
@@ -54,6 +55,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("Loading config...")
     _cfg = load_config()
+
+    # ── Initialize OTEL telemetry ──────────────────────────
+    otel_active = False
+    if _cfg.telemetry.enabled:
+        otel_active = telemetry.setup(
+            service_name=_cfg.telemetry.service_name,
+            otlp_endpoint=_cfg.telemetry.otlp_endpoint,
+            export_interval_ms=_cfg.telemetry.export_interval_ms,
+        )
 
     # ── Configure Gemini API ──────────────────────────────
     api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -102,6 +112,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  MCP Tools:  {len(mcp._tool_names)} available")
     logger.info(f"  MySQL:      {'connected' if _db.connected else 'in-memory fallback'}")
     logger.info(f"  LLM:        {_cfg.llm.model}")
+    logger.info(f"  OTEL:       {'ACTIVE' if otel_active else 'disabled'}")
     logger.info(f"  Context:    max={_cfg.context.max_messages} keep={_cfg.context.keep_recent} max_iter={_cfg.context.max_iterations}")
     logger.info("=" * 60)
 
@@ -124,6 +135,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# ── OTEL auto-instrumentation (must be at module level, before first request) ──
+telemetry.instrument_app(app)
 
 app.add_middleware(
     CORSMiddleware,

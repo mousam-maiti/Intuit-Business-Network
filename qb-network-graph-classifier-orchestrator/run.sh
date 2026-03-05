@@ -24,6 +24,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 JAR="$SCRIPT_DIR/target/classifier-orchestrator.jar"
+OTEL_AGENT_JAR="$SCRIPT_DIR/opentelemetry-javaagent.jar"
 
 header() {
     echo -e "${CYAN}"
@@ -85,7 +86,23 @@ do_run() {
     done
 
     cd "$SCRIPT_DIR"
-    java -jar "$JAR" "${ARGS[@]}"
+
+    # OTEL Java agent for auto-instrumentation (traces + metrics → collector)
+    OTEL_OPTS=""
+    if [ -f "$OTEL_AGENT_JAR" ]; then
+        OTEL_OPTS="-javaagent:$OTEL_AGENT_JAR"
+        export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-qb-classifier-orchestrator}"
+        export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}"
+        export OTEL_TRACES_EXPORTER="${OTEL_TRACES_EXPORTER:-otlp}"
+        export OTEL_METRICS_EXPORTER="${OTEL_METRICS_EXPORTER:-otlp}"
+        export OTEL_LOGS_EXPORTER="${OTEL_LOGS_EXPORTER:-none}"
+        export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=local-dev"
+        echo -e "  ${GREEN}✓${NC} OTEL Java Agent attached"
+    else
+        echo -e "  ${DIM}↻ No OTEL agent (download opentelemetry-javaagent.jar for tracing)${NC}"
+    fi
+
+    java $OTEL_OPTS -jar "$JAR" "${ARGS[@]}"
 }
 
 # ── Test ──

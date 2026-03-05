@@ -75,12 +75,21 @@ class ContextConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    enabled: bool = True
+    service_name: str = "qb-conversational-agent"
+    otlp_endpoint: str = "http://localhost:4317"
+    export_interval_ms: int = 15000
+
+
+@dataclass
 class AgentConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     mcp_server: MCPConfig = field(default_factory=MCPConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 # ── Loader ──────────────────────────────────────────────────
@@ -109,6 +118,7 @@ def load_config(path: str | None = None) -> AgentConfig:
         llm=_build(LLMConfig, raw.get("llm")),
         mysql=_build(MySQLConfig, raw.get("mysql")),
         context=_build(ContextConfig, raw.get("context")),
+        telemetry=_build(TelemetryConfig, raw.get("telemetry")),
     )
 
     # ── Env var overrides ────────────────────────────────────
@@ -133,5 +143,10 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.context.max_messages = _env("CONTEXT_MAX_MESSAGES", cfg.context.max_messages, int)
     cfg.context.keep_recent = _env("CONTEXT_KEEP_RECENT", cfg.context.keep_recent, int)
     cfg.context.max_iterations = _env("CONTEXT_MAX_ITERATIONS", cfg.context.max_iterations, int)
+
+    # Telemetry
+    cfg.telemetry.enabled = _env("OTEL_ENABLED", cfg.telemetry.enabled, bool)
+    cfg.telemetry.service_name = _env("OTEL_SERVICE_NAME", cfg.telemetry.service_name)
+    cfg.telemetry.otlp_endpoint = _env("OTEL_EXPORTER_OTLP_ENDPOINT", cfg.telemetry.otlp_endpoint)
 
     return cfg

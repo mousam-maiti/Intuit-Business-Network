@@ -139,6 +139,28 @@ curl -sf -X POST "http://localhost:5601/api/data_views/data_view" \
         }
     }' >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} flink-logs*" || echo -e "  ${DIM}↻ flink-logs* (exists)${NC}"
 
+curl -sf -X POST "http://localhost:5601/api/data_views/data_view" \
+    -H "kbn-xsrf: true" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "data_view": {
+            "title": "qb-traces*",
+            "name": "QB Service Traces",
+            "timeFieldName": "@timestamp"
+        }
+    }' >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} qb-traces*" || echo -e "  ${DIM}↻ qb-traces* (exists)${NC}"
+
+curl -sf -X POST "http://localhost:5601/api/data_views/data_view" \
+    -H "kbn-xsrf: true" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "data_view": {
+            "title": "qb-logs*",
+            "name": "QB Service Logs",
+            "timeFieldName": "@timestamp"
+        }
+    }' >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} qb-logs*" || echo -e "  ${DIM}↻ qb-logs* (exists)${NC}"
+
 # ── Step 6: ES index template ──
 echo -e "\n${YELLOW}Step 6: Creating ES index template...${NC}"
 curl -sf -X PUT "http://localhost:9200/_index_template/flink-metrics-template" \

@@ -1,13 +1,14 @@
 # ============================================================
-# OTEL Collector — Scrapes Flink Prometheus, exports to ES
+# OTEL Collector — Full observability for QB Network Graph
 # ============================================================
-# Flink runs natively, exposes Prometheus at :9249/metrics
-# Collector runs in Docker, scrapes via host.docker.internal
+# Sources:
+#   - Flink (:9249) Prometheus scrape
+#   - Python services + Java classifier via OTLP gRPC (:4317)
 #
-# Pipeline:
-#   Flink (:9249) → prometheus scraper → OTEL Collector
-#       → metrics: re-exposed at :8889/metrics
-#       → logs:    Elasticsearch → Kibana
+# Pipelines:
+#   metrics:  Flink + OTLP → Prometheus :8889
+#   traces:   OTLP → Elasticsearch → Kibana
+#   logs:     OTLP → Elasticsearch → Kibana
 # ============================================================
 
 receivers:
@@ -23,7 +24,7 @@ receivers:
                 service: qb-flink-cdc
                 environment: local-dev
 
-  # OTLP for any direct exporters (future use)
+  # OTLP from Python services + Java classifier
   otlp:
     protocols:
       grpc:
@@ -36,7 +37,8 @@ processors:
     send_batch_size: 1000
     timeout: 10s
 
-  resource:
+  # Only for Flink metrics pipeline (hardcoded service name)
+  resource/flink:
     attributes:
       - key: service.name
         value: qb-flink-cdc
@@ -45,12 +47,19 @@ processors:
         value: local-dev
         action: upsert
 
+  # For OTLP pipelines — add environment, preserve service.name from SDK
+  resource/otlp:
+    attributes:
+      - key: deployment.environment
+        value: local-dev
+        action: upsert
+
 exporters:
-  # Logs/traces → Elasticsearch → Kibana
-  elasticsearch/logs:
+  # Traces → Elasticsearch → Kibana
+  elasticsearch/traces:
     endpoints:
       - http://qb-elasticsearch:9200
-    logs_index: flink-logs
+    traces_index: qb-traces
     sending_queue:
       enabled: true
       num_consumers: 4
@@ -60,7 +69,21 @@ exporters:
       initial_interval: 1s
       max_interval: 30s
 
-  # Metrics → Prometheus endpoint (scraped Flink metrics re-exposed)
+  # Logs → Elasticsearch → Kibana
+  elasticsearch/logs:
+    endpoints:
+      - http://qb-elasticsearch:9200
+    logs_index: qb-logs
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+    retry:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+
+  # Metrics → Prometheus endpoint
   # View at: http://localhost:8889/metrics
   prometheus:
     endpoint: 0.0.0.0:8889
@@ -74,13 +97,17 @@ exporters:
 
 service:
   pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/otlp, batch]
+      exporters: [elasticsearch/traces, debug]
     metrics:
       receivers: [prometheus, otlp]
-      processors: [resource, batch]
+      processors: [batch]
       exporters: [prometheus, debug]
     logs:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource/otlp, batch]
       exporters: [elasticsearch/logs]
 
   telemetry:
