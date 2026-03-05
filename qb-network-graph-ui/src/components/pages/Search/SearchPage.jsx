@@ -1,11 +1,12 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Building2, ChevronRight, SortAsc, X } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { INDUSTRIES, getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
 import { getRelType } from '@/utils/graph';
-import { getNativeOverrides, saveNativeOverride } from '@/api/native';
-import { Widget, RelTypeBadge, EntityDetailPanel } from '@/components/shared';
+import { config } from '@/config/env';
+import { getNativeOverrides, saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
+import { Widget, RelTypeBadge, EntityDetailPanel, MergeFlowModal } from '@/components/shared';
 
 export default function SearchPage({ onNavigate, networkEntities = [], networkRelationships = [] }) {
   const [q, setQ] = useState('');
@@ -17,6 +18,8 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
   const inputRef = useRef(null);
 
   const [nativeOverrides, setNativeOverrides] = useState({});
+  const [mergeSource, setMergeSource] = useState(null);
+
   useEffect(() => {
     getNativeOverrides().then(r => setNativeOverrides(r.data));
   }, []);
@@ -30,6 +33,26 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
     }
   };
 
+  const handleConfirmMerge = useCallback(async (source, target, reason, mergeResolution) => {
+    if (mergeResolution && Object.keys(mergeResolution).length > 0) {
+      const merged = { ...(nativeOverrides[target.id] || {}), ...mergeResolution };
+      await saveNativeOverride(target.id, merged);
+      setNativeOverrides((prev) => ({ ...prev, [target.id]: { ...prev[target.id], ...mergeResolution } }));
+    }
+    const sourceRels = networkRelationships.filter((r) => r.source === source.id || r.target === source.id);
+    const result = await createNativeMerge({
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      reason,
+      migratedRelationships: sourceRels.map((r) => ({ source: r.source, target: r.target })),
+    });
+    return result.data;
+  }, [nativeOverrides, networkRelationships]);
+
+  const handleUndoMerge = useCallback(async (mergeId) => {
+    await undoNativeMerge(mergeId);
+  }, []);
+
   const typeaheadResults = useMemo(() => {
     if (q.length < 2) return [];
     const lower = q.toLowerCase();
@@ -40,7 +63,7 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
     ).slice(0, 5);
   }, [q, networkEntities]);
 
-  const selectedEntityId = networkEntities.length > 0 ? networkEntities[0]?.id : null;
+  const selectedEntityId = config.currentEntityId;
 
   const filtered = useMemo(() => {
     let list = networkEntities.filter((e) => {
@@ -48,8 +71,9 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
       const mi = !indFilter || e.industry === indFilter;
       if (typeFilter !== 'all' && selectedEntityId) {
         const hasType = networkRelationships.some((r) => {
-          if (typeFilter === 'vendor') return r.source === selectedEntityId && r.target === e.id;
-          return r.target === selectedEntityId && r.source === e.id;
+          if (r.source !== selectedEntityId && r.target !== selectedEntityId) return false;
+          if (r.source !== e.id && r.target !== e.id) return false;
+          return getRelType(r, selectedEntityId) === typeFilter;
         });
         if (!hasType) return false;
       }
@@ -100,15 +124,25 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
         <div className="w-48 space-y-3 shrink-0">
           <Widget title="RELATIONSHIP">
             <div className="space-y-0.5">
-              {[{ k: 'all', l: 'All types' }, { k: 'vendor', l: 'My vendors' }, { k: 'client', l: 'My clients' }].map((f) => (
-                <button key={f.k} onClick={() => setTypeFilter(f.k)}
-                  className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded transition-colors text-left"
-                  style={{ backgroundColor: typeFilter === f.k ? QB.purpleLight : 'transparent', color: typeFilter === f.k ? QB.purpleDark : QB.textSecondary }}>
-                  {f.k === 'vendor' && <span style={{ color: QB.purple }}>{'\u2190'}</span>}
-                  {f.k === 'client' && <span style={{ color: QB.green }}>{'\u2192'}</span>}
-                  {f.l}
-                </button>
-              ))}
+              {(() => {
+                const myRels = networkRelationships.filter((r) => r.source === selectedEntityId || r.target === selectedEntityId);
+                const vendorCount = myRels.filter((r) => getRelType(r, selectedEntityId) === 'vendor').length;
+                const clientCount = myRels.filter((r) => getRelType(r, selectedEntityId) === 'client').length;
+                return [
+                  { k: 'all', l: 'All types', n: networkEntities.length },
+                  { k: 'vendor', l: 'My vendors', n: vendorCount },
+                  { k: 'client', l: 'My clients', n: clientCount },
+                ].map((f) => (
+                  <button key={f.k} onClick={() => setTypeFilter(f.k)}
+                    className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded transition-colors text-left"
+                    style={{ backgroundColor: typeFilter === f.k ? QB.purpleLight : 'transparent', color: typeFilter === f.k ? QB.purpleDark : QB.textSecondary }}>
+                    {f.k === 'vendor' && <span style={{ color: QB.purple }}>{'\u2190'}</span>}
+                    {f.k === 'client' && <span style={{ color: QB.green }}>{'\u2192'}</span>}
+                    <span className="flex-1">{f.l}</span>
+                    <span style={{ color: QB.textMuted }}>{f.n}</span>
+                  </button>
+                ));
+              })()}
             </div>
           </Widget>
           <Widget title="INDUSTRY">
@@ -182,15 +216,26 @@ export default function SearchPage({ onNavigate, networkEntities = [], networkRe
               onSaveNative={handleSaveNative}
               onOpenAI={() => onNavigate('assist', selectedEntity)}
               onShowOnNetwork={() => onNavigate('network', selectedEntity)}
-              onMerge={() => {}}
+              onMerge={() => setMergeSource(selectedEntity)}
               onSelectEntity={setSelectedEntity}
-              vendorRels={networkRelationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
-              clientRels={networkRelationships.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              vendorRels={networkRelationships.filter((r) => (r.source === selectedEntity.id || r.target === selectedEntity.id) && getRelType(r, selectedEntity.id) === 'vendor').sort((a, b) => b.volume - a.volume)}
+              clientRels={networkRelationships.filter((r) => (r.source === selectedEntity.id || r.target === selectedEntity.id) && getRelType(r, selectedEntity.id) === 'client').sort((a, b) => b.volume - a.volume)}
               allEntities={networkEntities}
             />
           </div>
         )}
       </div>
+
+      {mergeSource && (
+        <MergeFlowModal
+          sourceEntity={mergeSource}
+          allEntities={networkEntities}
+          relationships={networkRelationships}
+          onConfirmMerge={handleConfirmMerge}
+          onUndoMerge={handleUndoMerge}
+          onClose={() => setMergeSource(null)}
+        />
+      )}
     </div>
   );
 }

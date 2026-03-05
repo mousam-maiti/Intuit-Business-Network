@@ -1,10 +1,8 @@
 """
-Embedding client — Gemini text-embedding-004 for semantic similarity.
+Embedding client — Gemini embedding for semantic similarity + vector search.
 
-Called by semantic_similarity tool when compare_fields returns ambiguous (0.40-0.85).
-Computes per-dimension cosine similarity between orphan and candidate persona texts.
-
-Falls back to random vectors if API unavailable (local dev).
+Uses google-genai SDK (v1) with gemini-embedding-001 and output_dimensionality
+to control vector size. Falls back to deterministic mock vectors if API unavailable.
 """
 from __future__ import annotations
 import logging
@@ -15,12 +13,15 @@ from config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
-# Try Gemini
+# Try new google-genai SDK first, fall back to deprecated google.generativeai
+_genai_client = None
+HAS_GENAI = False
 try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
+    from google import genai as genai_new
+    from google.genai import types as genai_types
+    HAS_GENAI = True
 except ImportError:
-    HAS_GEMINI = False
+    pass
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -42,8 +43,10 @@ class EmbeddingClient:
         self._dimension = cfg.dimension
 
     async def connect(self):
-        if not HAS_GEMINI:
-            logger.warning("google-generativeai not installed — using mock embeddings")
+        global _genai_client
+
+        if not HAS_GENAI:
+            logger.warning("google-genai not installed — using mock embeddings")
             self._using_mock = True
             return
 
@@ -55,16 +58,19 @@ class EmbeddingClient:
             return
 
         try:
-            genai.configure(api_key=api_key)
-            # Quick test
-            result = genai.embed_content(
-                model=f"models/{self._model_name}",
-                content="test",
-                task_type=self._cfg.task_type,
+            _genai_client = genai_new.Client(api_key=api_key)
+            # Quick test with output_dimensionality
+            result = _genai_client.models.embed_content(
+                model=self._model_name,
+                contents="test",
+                config=genai_types.EmbedContentConfig(
+                    output_dimensionality=self._dimension,
+                ),
             )
-            if result and "embedding" in result:
+            if result and result.embeddings:
+                actual_dim = len(result.embeddings[0].values)
                 self._available = True
-                self._dimension = len(result["embedding"])
+                self._dimension = actual_dim
                 logger.info(f"Gemini embedding connected: {self._model_name} ({self._dimension}d)")
             else:
                 self._using_mock = True
@@ -88,12 +94,14 @@ class EmbeddingClient:
             return vec / np.linalg.norm(vec)
 
         try:
-            result = genai.embed_content(
-                model=f"models/{self._model_name}",
-                content=text,
-                task_type=self._cfg.task_type,
+            result = _genai_client.models.embed_content(
+                model=self._model_name,
+                contents=text,
+                config=genai_types.EmbedContentConfig(
+                    output_dimensionality=self._dimension,
+                ),
             )
-            return np.array(result["embedding"], dtype=np.float32)
+            return np.array(result.embeddings[0].values, dtype=np.float32)
         except Exception as e:
             logger.error(f"Embedding failed for text '{text[:50]}': {e}")
             return None
@@ -157,6 +165,13 @@ class EmbeddingClient:
             "model_used": "mock" if self._using_mock else self._model_name,
             "inference_ms": elapsed_ms,
         }
+
+    def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for a single text string (returns list[float])."""
+        vec = self.embed(text)
+        if vec is None:
+            return []
+        return vec.tolist()
 
     @property
     def is_mock(self) -> bool:

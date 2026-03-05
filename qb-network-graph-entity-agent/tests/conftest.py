@@ -17,7 +17,7 @@ from models.persona import (
     SparsityScores, GoldenRecord,
 )
 from config import (
-    AgentConfig, MySQLConfig, MilvusConfig, EmbeddingConfig,
+    AgentConfig, MySQLConfig, EmbeddingConfig,
     KnowledgeGraphConfig, LLMConfig, load_config,
 )
 
@@ -153,23 +153,6 @@ def default_config():
 
 # ── Mock Clients ───────────────────────────────────────────────
 
-@pytest.fixture
-def mock_mysql():
-    """MySQLClient in mock mode."""
-    from clients.mysql_client import MySQLClient
-    client = MySQLClient(MySQLConfig())
-    client._using_mock = True
-    return client
-
-
-@pytest.fixture
-def mock_milvus():
-    """MilvusClient in mock mode."""
-    from clients.milvus_client import MilvusClient
-    client = MilvusClient(MilvusConfig())
-    client._using_mock = True
-    client._embed_provider = "none"
-    return client
 
 
 @pytest.fixture

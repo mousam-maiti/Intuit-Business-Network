@@ -1,6 +1,7 @@
 package com.qb.classifier;
 
-import com.qb.classifier.classify.*;
+import com.qb.classifier.classifier.PersonaBuilder;
+import com.qb.classifier.classifier.impl.*;
 import com.qb.classifier.model.ClassifiedPersona;
 import com.qb.classifier.model.EntityConnection;
 import org.junit.jupiter.api.Test;
@@ -14,13 +15,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ClassifierTests {
 
-    // ── NameNormalizer ────────────────────────────────────────
+    // ── NameClassifier ────────────────────────────────────────
 
     @Nested
-    class NameNormalizerTests {
+    class NameClassifierTests {
+
+        private final NameClassifier classifier = new NameClassifier();
+
+        private NameClassifier.Result normalize(String name) {
+            return classifier.classify(new EntityConnection(
+                0, 0, "", name, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null
+            ));
+        }
 
         @Test void normalCase() {
-            var r = NameNormalizer.normalize("Bob's Plumbing LLC");
+            var r = normalize("Bob's Plumbing LLC");
             assertEquals("BOBS PLUMBING", r.normalizedName());
             assertEquals("BOBS", r.nameFirstToken());
             assertEquals(List.of("BOBS", "PLUMBING"), r.nameTokens());
@@ -28,33 +38,32 @@ class ClassifierTests {
         }
 
         @Test void corporationSuffix() {
-            var r = NameNormalizer.normalize("Acme Construction Co Inc.");
+            var r = normalize("Acme Construction Co Inc.");
             assertEquals("ACME CONSTRUCTION", r.normalizedName());
             assertEquals("INC", r.legalSuffix());
         }
 
         @Test void noSuffix() {
-            var r = NameNormalizer.normalize("Capital City Plumbing");
+            var r = normalize("Capital City Plumbing");
             assertEquals("CAPITAL CITY PLUMBING", r.normalizedName());
             assertNull(r.legalSuffix());
         }
 
         @Test void punctuation() {
-            var r = NameNormalizer.normalize("O'Brien & Sons, Inc.");
+            var r = normalize("O'Brien & Sons, Inc.");
             assertEquals("OBRIEN SONS", r.normalizedName());
             assertEquals("INC", r.legalSuffix());
         }
 
         @Test void empty() {
-            var r = NameNormalizer.normalize(null);
+            var r = normalize(null);
             assertEquals("", r.normalizedName());
             assertTrue(r.nameTokens().isEmpty());
         }
 
         @Test void noiseWords() {
-            var r = NameNormalizer.normalize("The A & B Company LLC");
+            var r = normalize("The A & B Company LLC");
             assertEquals("LLC", r.legalSuffix());
-            // "THE", "A", "&", "B" filtered (single char or noise)
             assertFalse(r.nameTokens().contains("THE"));
         }
     }
@@ -65,7 +74,7 @@ class ClassifierTests {
     class IndustryClassifierTests {
 
         @Test void exactMatch() {
-            var r = IndustryClassifier.classify("Plumbing Supply");
+            var r = IndustryClassifier.classifyCategory("Plumbing Supply");
             assertTrue(r.classified());
             assertEquals("423720", r.naicsCode());
             assertEquals("42", r.naicsSector());
@@ -74,20 +83,20 @@ class ClassifierTests {
         }
 
         @Test void keywordMatch() {
-            var r = IndustryClassifier.classify("General dumpster services");
+            var r = IndustryClassifier.classifyCategory("General dumpster services");
             assertTrue(r.classified());
             assertEquals("562111", r.naicsCode());
             assertEquals("keyword", r.source());
         }
 
         @Test void noMatch() {
-            var r = IndustryClassifier.classify("Quantum Computing Research");
+            var r = IndustryClassifier.classifyCategory("Quantum Computing Research");
             assertFalse(r.classified());
             assertEquals("none", r.source());
         }
 
         @Test void nullInput() {
-            var r = IndustryClassifier.classify(null);
+            var r = IndustryClassifier.classifyCategory(null);
             assertFalse(r.classified());
         }
     }
@@ -123,13 +132,13 @@ class ClassifierTests {
         }
     }
 
-    // ── LocationNormalizer ────────────────────────────────────
+    // ── LocationClassifier ───────────────────────────────────
 
     @Nested
-    class LocationNormalizerTests {
+    class LocationClassifierTests {
 
         @Test void normalCase() {
-            var r = LocationNormalizer.normalize("Austin", "TX", "78745");
+            var r = LocationClassifier.normalize("Austin", "TX", "78745");
             assertEquals("TX", r.state());
             assertEquals("AUSTIN", r.cityNorm());
             assertEquals("787", r.zip3());
@@ -137,13 +146,13 @@ class ClassifierTests {
         }
 
         @Test void zipWithExtension() {
-            var r = LocationNormalizer.normalize(null, null, "78745-1234");
+            var r = LocationClassifier.normalize(null, null, "78745-1234");
             assertEquals("78745", r.zip5());
             assertEquals("787", r.zip3());
         }
 
         @Test void allNull() {
-            var r = LocationNormalizer.normalize(null, null, null);
+            var r = LocationClassifier.normalize(null, null, null);
             assertNull(r.state());
             assertNull(r.cityNorm());
         }
@@ -155,45 +164,45 @@ class ClassifierTests {
     class BehavioralClassifierTests {
 
         @Test void mediumBracket() {
-            var r = BehavioralClassifier.classify(new BigDecimal("84000.00"), 47L);
+            var r = BehavioralClassifier.classifyBehavior(new BigDecimal("84000.00"), 47L);
             assertEquals("MEDIUM", r.volumeBracket());
             assertEquals(47, r.transactionCount());
             assertNotNull(r.avgTransaction());
         }
 
         @Test void veryHighBracket() {
-            var r = BehavioralClassifier.classify(new BigDecimal("2500000.00"), 150L);
+            var r = BehavioralClassifier.classifyBehavior(new BigDecimal("2500000.00"), 150L);
             assertEquals("VERY_HIGH", r.volumeBracket());
         }
 
         @Test void nullVolume() {
-            var r = BehavioralClassifier.classify(null, null);
+            var r = BehavioralClassifier.classifyBehavior(null, null);
             assertNull(r.volumeBracket());
         }
     }
 
-    // ── CommodityExtractor ───────────────────────────────────
+    // ── CommodityClassifier ──────────────────────────────────
 
     @Nested
-    class CommodityExtractorTests {
+    class CommodityClassifierTests {
 
         @Test void explicitCommodity() {
-            var r = CommodityExtractor.extract("PVC pipe, copper fittings", null, null);
+            var r = CommodityClassifier.extract("PVC pipe, copper fittings", null, null);
             assertFalse(r.topKeywords().isEmpty());
         }
 
         @Test void fromCategory() {
-            var r = CommodityExtractor.extract(null, "Plumbing Supply", null);
+            var r = CommodityClassifier.extract(null, "Plumbing Supply", null);
             assertTrue(r.topKeywords().contains("plumbing"));
         }
 
         @Test void fromDisplayName() {
-            var r = CommodityExtractor.extract(null, null, "Bob's Roofing Inc");
+            var r = CommodityClassifier.extract(null, null, "Bob's Roofing Inc");
             assertTrue(r.topKeywords().contains("roofing"));
         }
 
         @Test void allNull() {
-            var r = CommodityExtractor.extract(null, null, null);
+            var r = CommodityClassifier.extract(null, null, null);
             assertTrue(r.topKeywords().isEmpty());
         }
     }
@@ -202,6 +211,15 @@ class ClassifierTests {
 
     @Nested
     class PersonaBuilderTests {
+
+        private final PersonaBuilder builder = new PersonaBuilder(
+            new NameClassifier(),
+            new IdentityClassifier(),
+            new IndustryClassifier(),
+            new LocationClassifier(),
+            new CommodityClassifier(),
+            new BehavioralClassifier()
+        );
 
         @Test void fullRow() {
             EntityConnection conn = new EntityConnection(
@@ -217,7 +235,7 @@ class ClassifierTests {
                 null
             );
 
-            ClassifiedPersona p = PersonaBuilder.build(conn);
+            ClassifiedPersona p = builder.build(conn);
 
             // Identity
             assertEquals("BOBS PLUMBING", p.identity().normalizedName());
@@ -259,7 +277,7 @@ class ClassifierTests {
                 null, null, null, null, null
             );
 
-            ClassifiedPersona p = PersonaBuilder.build(conn);
+            ClassifiedPersona p = builder.build(conn);
 
             assertEquals("BP SUPPLY", p.identity().normalizedName());
             assertNull(p.identity().einClean());

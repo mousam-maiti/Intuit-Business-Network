@@ -1,11 +1,17 @@
 /**
  * Get relationship type relative to a given entity.
- * Edge convention: source PAYS target.
- * If entityId is source → target is their vendor.
- * If entityId is target → source is their client.
+ * relType is from the source's perspective:
+ *   "vendor"  → source BUYS FROM target (target is source's vendor)
+ *   "client"  → source SELLS TO target (target is source's client)
+ * When entityId is the target, we flip.
  */
-export const getRelType = (rel, entityId) =>
-  rel.source === entityId ? 'vendor' : 'client';
+export const getRelType = (rel, entityId) => {
+  if (rel.relType) {
+    return rel.source === entityId ? rel.relType : (rel.relType === 'vendor' ? 'client' : 'vendor');
+  }
+  // Fallback when relType is missing
+  return rel.source === entityId ? 'vendor' : 'client';
+};
 
 /**
  * BFS shortest path between two entity IDs.

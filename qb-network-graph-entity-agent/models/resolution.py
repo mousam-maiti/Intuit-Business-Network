@@ -37,9 +37,10 @@ class ResolutionRequest(BaseModel):
     event_id: str
     record_id: str
     record_type: str = "vendor"         # vendor | customer
-    company_id: Optional[int] = None
+    company_id: int
     chain_depth: int = 0
     classified_persona: ClassifiedPersona
+    fast_mode: bool = False             # skip embedding + LLM, deterministic only
 
 
 class ReEvaluationRequest(BaseModel):
@@ -132,6 +133,11 @@ class ResolutionResponse(BaseModel):
     key_factors: list[str] = Field(default_factory=list)
     evaluation_chain: list[EvaluationStep] = Field(default_factory=list)
     agent_metadata: dict = Field(default_factory=dict)
+    # Payload for Classifier Orchestrator to write to Paimon gold + sync to Neo4j
+    golden_record_after: Optional[dict] = None
+    relationship: Optional[dict] = None
+    audit_record: Optional[dict] = None
+    pending_resolution: Optional[dict] = None
 
 
 class ReEvaluationResponse(BaseModel):

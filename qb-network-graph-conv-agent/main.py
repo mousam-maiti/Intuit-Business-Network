@@ -148,12 +148,17 @@ async def websocket_chat(ws: WebSocket, session_id: str, user_id: str = Query(de
     # Get or create session
     session = _session_mgr.get_or_create_session(session_id, user_id)
 
-    # Send session info
-    await ws.send_json(WSSessionInfo(
-        session_id=session["session_id"],
-        title=session.get("title"),
-        message_count=session.get("message_count", 0),
-    ).model_dump())
+    # Send session info — client may disconnect before this completes
+    # (e.g. React StrictMode tears down the first mount)
+    try:
+        await ws.send_json(WSSessionInfo(
+            session_id=session["session_id"],
+            title=session.get("title"),
+            message_count=session.get("message_count", 0),
+        ).model_dump())
+    except WebSocketDisconnect:
+        logger.debug(f"Client disconnected before session info sent: session={session_id}")
+        return
 
     try:
         while True:

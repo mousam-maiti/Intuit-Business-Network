@@ -1,16 +1,22 @@
 package com.qb.classifier;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.qb.classifier.classify.PersonaBuilder;
-import com.qb.classifier.client.AgentClient;
+import com.qb.classifier.classifier.PersonaBuilder;
+import com.qb.classifier.classifier.impl.*;
+import com.qb.classifier.client.ResolutionClient;
+import com.qb.classifier.client.SyncClient;
+import com.qb.classifier.client.impl.HttpResolutionClient;
+import com.qb.classifier.client.impl.HttpSyncClient;
 import com.qb.classifier.config.Config;
 import com.qb.classifier.model.ClassifiedPersona;
 import com.qb.classifier.model.EntityConnection;
 import com.qb.classifier.model.ResolutionRequest;
-import com.qb.classifier.stream.PaimonConsumer;
-import com.qb.classifier.stream.PaimonGoldWriter;
+import com.qb.classifier.service.ClassificationService;
+import com.qb.classifier.stream.EntityConnectionSource;
+import com.qb.classifier.stream.ResolvedEntitySink;
+import com.qb.classifier.stream.impl.PaimonSink;
+import com.qb.classifier.stream.impl.PaimonSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,10 +32,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * ClassifiedPersona, and POSTs to the Entity Resolution Agent.
  *
  * Usage:
- *   java -jar classifier-orchestrator.jar              # batch mode (default)
- *   java -jar classifier-orchestrator.jar --stream     # stream mode
- *   java -jar classifier-orchestrator.jar --stream --reset  # stream from beginning (clears checkpoint)
+ *   java -jar classifier-orchestrator.jar              # batch two-pass (default)
+ *   java -jar classifier-orchestrator.jar --stream     # stream two-pass (fast → full per record)
+ *   java -jar classifier-orchestrator.jar --stream --reset  # stream from beginning
  *   java -jar classifier-orchestrator.jar --classify-only   # classify + dump JSON, no agent call
+ *   java -jar classifier-orchestrator.jar --batch --fast    # batch pass-1 only: deterministic, parks ambiguous
+ *   java -jar classifier-orchestrator.jar --batch           # batch two-pass (fast → full fallback per record)
+ *
+ * Two-pass resolution (default for both batch and stream):
+ *   Pass 1: fast deterministic only (~35ms/record, resolves ~70%)
+ *   Pass 2: if REVIEW → full resolution with embedding + LLM for ambiguous
+ *   --fast disables pass 2 (batch-only workflow for corpus enrichment)
  */
 public class App {
 
@@ -43,29 +56,52 @@ public class App {
             String mode = parseMode(args, config.mode);
             boolean classifyOnly = hasFlag(args, "--classify-only");
             boolean reset = hasFlag(args, "--reset");
+            boolean fastMode = hasFlag(args, "--fast");
 
-            printBanner(config, mode, classifyOnly);
+            printBanner(config, mode, classifyOnly, fastMode);
 
-            // Initialize
-            PaimonConsumer consumer = new PaimonConsumer(config);
+            // ── Wire dependencies ─────────────────────────────
+            PersonaBuilder personaBuilder = new PersonaBuilder(
+                new NameClassifier(),
+                new IdentityClassifier(),
+                new IndustryClassifier(),
+                new LocationClassifier(),
+                new CommodityClassifier(),
+                new BehavioralClassifier()
+            );
+
+            EntityConnectionSource source = new PaimonSource(config);
+
+            HttpResolutionClient httpClient = classifyOnly ? null : new HttpResolutionClient(
+                config.agentBaseUrl, config.agentTimeoutMs, config.dryRun
+            );
+            ResolutionClient agent = httpClient;
+
+            ResolvedEntitySink sink = classifyOnly ? null : new PaimonSink(config);
+
+            SyncClient syncClient = classifyOnly ? null : new HttpSyncClient(config.syncBaseUrl);
+
+            ClassificationService classificationService = new ClassificationService(
+                personaBuilder, agent, sink, syncClient
+            );
+            classificationService.setFastMode(fastMode);
+            // --fast disables two-pass (pass-1-only for batch workflow)
+            // Without --fast, two-pass is automatic (fast first → full if REVIEW)
+            if (fastMode) {
+                classificationService.setTwoPass(false);
+            }
 
             // Reset checkpoint if requested
             if (reset) {
-                consumer.clearCheckpoint();
+                source.clearCheckpoint();
                 log.info("Checkpoint cleared — will process entire table from beginning");
             }
-            AgentClient agent = classifyOnly ? null : new AgentClient(
-                config.agentBaseUrl, config.agentTimeoutMs, config.dryRun
-            );
-
-            // Initialize Paimon gold writer for persistence after each /resolve
-            PaimonGoldWriter goldWriter = classifyOnly ? null : new PaimonGoldWriter(config);
 
             // Wire dead-letter sink for failed agent calls
-            Path deadLetterDir = Path.of("dead-letter");
-            if (agent != null) {
+            if (httpClient != null) {
+                Path deadLetterDir = Path.of("dead-letter");
                 Files.createDirectories(deadLetterDir);
-                agent.setDeadLetterSink(deadLetter -> {
+                httpClient.setDeadLetterSink(deadLetter -> {
                     try {
                         String filename = String.format("%s-%d.json",
                             deadLetter.request().recordId(), System.currentTimeMillis());
@@ -98,64 +134,20 @@ public class App {
 
             // Row processor
             java.util.function.Consumer<EntityConnection> processor = conn -> {
-                // Skip rows without identity (partial writes from Job 2)
                 if (config.skipUnnamed && !conn.hasIdentity()) {
                     skippedNoName.incrementAndGet();
                     return;
                 }
 
-                // Classify
-                ClassifiedPersona persona = PersonaBuilder.build(conn);
-                classified.incrementAndGet();
-
                 if (classifyOnly) {
-                    // Dump to JSON file
+                    ClassifiedPersona persona = classificationService.classify(conn);
+                    classified.incrementAndGet();
                     writeClassifiedJson(outputDir, conn, persona);
                 } else {
-                    // Send to agent
-                    ResolutionRequest request = ResolutionRequest.from(conn, persona);
-                    String response = agent.resolve(request);
-
-                    // Write resolved data to Paimon gold tables
-                    if (response != null && goldWriter != null && goldWriter.isAvailable()) {
-                        try {
-                            JsonNode responseJson = JSON.readTree(response);
-                            // Write golden record (after state)
-                            JsonNode grAfter = responseJson.get("golden_record_after");
-                            if (grAfter != null && !grAfter.isNull()) {
-                                goldWriter.writeGoldenRecord(grAfter);
-                            }
-                            // Write relationship if present
-                            JsonNode relationship = responseJson.get("relationship");
-                            if (relationship != null && !relationship.isNull()) {
-                                goldWriter.writeRelationship(relationship);
-                            }
-                            // Write audit record if present
-                            JsonNode audit = responseJson.get("audit_record");
-                            if (audit != null && !audit.isNull()) {
-                                goldWriter.writeAudit(audit);
-                            }
-                        } catch (Exception e) {
-                            log.warn("Failed to write to Paimon gold for {}: {}",
-                                conn.displayName(), e.getMessage());
-                        }
-                    }
-
-                    if (log.isDebugEnabled() && response != null) {
-                        log.debug("[{}] {} → {} | identity={} industry={} location={} commodity={} behavioral={}",
-                            conn.connectionType(),
-                            conn.displayName(),
-                            persona.identity().normalizedName(),
-                            persona.sparsity().identity(),
-                            persona.sparsity().industry(),
-                            persona.sparsity().location(),
-                            persona.sparsity().commodity(),
-                            persona.sparsity().behavioral()
-                        );
-                    }
+                    classificationService.classifyAndResolve(conn);
+                    classified.incrementAndGet();
                 }
 
-                // Progress logging
                 int count = classified.get();
                 if (count % 50 == 0) {
                     log.info("Progress: {} classified, {} skipped (no name)", count, skippedNoName.get());
@@ -167,22 +159,23 @@ public class App {
 
             switch (mode) {
                 case "batch" -> {
-                    int total = consumer.readBatch(processor);
+                    int total = source.readAll(processor);
                     long elapsed = System.currentTimeMillis() - start;
-                    printSummary(total, classified.get(), skippedNoName.get(), elapsed, agent, classifyOnly);
+                    printSummary(total, classified.get(), skippedNoName.get(), elapsed,
+                        agent, classifyOnly, classificationService);
                 }
                 case "stream" -> {
-                    // Register shutdown hook
                     Thread mainThread = Thread.currentThread();
                     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                         log.info("Shutdown signal received...");
                         mainThread.interrupt();
                         try { mainThread.join(5000); } catch (InterruptedException ignored) {}
                         long elapsed = System.currentTimeMillis() - start;
-                        printSummary(-1, classified.get(), skippedNoName.get(), elapsed, agent, classifyOnly);
+                        printSummary(-1, classified.get(), skippedNoName.get(), elapsed,
+                            agent, classifyOnly, classificationService);
                     }));
 
-                    consumer.readStream(processor);
+                    source.streamChanges(processor);
                 }
                 default -> {
                     log.error("Unknown mode: {}", mode);
@@ -228,7 +221,7 @@ public class App {
         }
     }
 
-    private static void printBanner(Config config, String mode, boolean classifyOnly) {
+    private static void printBanner(Config config, String mode, boolean classifyOnly, boolean fastMode) {
         System.out.println();
         System.out.println("  ╔══════════════════════════════════════════════════╗");
         System.out.println("  ║   QB Network Graph — Classifier Orchestrator    ║");
@@ -237,6 +230,11 @@ public class App {
         System.out.printf("  Warehouse:  %s%n", config.warehousePath);
         System.out.printf("  Table:      %s%n", config.tableIdentifier());
         System.out.printf("  Mode:       %s%n", mode);
+        if (fastMode) {
+            System.out.println("  Fast mode:  ON (pass-1 only: deterministic, parks ambiguous)");
+        } else {
+            System.out.println("  Two-pass:   ON (fast deterministic → full fallback for ambiguous)");
+        }
         if (classifyOnly) {
             System.out.println("  Output:     ./classified-output/ (JSON files)");
         } else {
@@ -250,7 +248,8 @@ public class App {
     }
 
     private static void printSummary(int totalRows, int classified, int skipped,
-                                      long elapsedMs, AgentClient agent, boolean classifyOnly) {
+                                      long elapsedMs, ResolutionClient agent, boolean classifyOnly,
+                                      ClassificationService svc) {
         System.out.println();
         System.out.println("  ────────────────────────────────────────────────");
         System.out.println("  Summary");
@@ -260,6 +259,10 @@ public class App {
         }
         System.out.printf("  Classified:           %d%n", classified);
         System.out.printf("  Skipped (no name):    %d%n", skipped);
+        if (svc != null && (svc.getFastPassResolved() > 0 || svc.getFullPassFallbacks() > 0)) {
+            System.out.printf("  Fast-pass resolved:   %d%n", svc.getFastPassResolved());
+            System.out.printf("  Full-pass fallbacks:  %d%n", svc.getFullPassFallbacks());
+        }
         System.out.printf("  Elapsed:              %.1f s%n", elapsedMs / 1000.0);
         if (classified > 0) {
             System.out.printf("  Avg per record:       %.1f ms%n", (double) elapsedMs / classified);

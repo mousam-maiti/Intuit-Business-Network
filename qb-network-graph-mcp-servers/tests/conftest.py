@@ -1,7 +1,7 @@
 """
 Test fixtures for MCP server tests.
 
-Provides mock AppContext with in-memory clients for all tools.
+Provides mock AppContext with in-memory clients and services for all tools.
 """
 import pytest
 import pytest_asyncio
@@ -11,14 +11,20 @@ import os
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import AgentConfig, MySQLConfig, MilvusConfig, EmbeddingConfig, LLMConfig, Neo4jConfig, RedisConfig
+from config import AgentConfig, MySQLConfig, EmbeddingConfig, LLMConfig, Neo4jConfig, RedisConfig
 from clients.mysql_client import MySQLClient
-from clients.milvus_client import MilvusClient
 from clients.embedding_client import EmbeddingClient
 from clients.llm_client import LLMClient
 from clients.neo4j_client import Neo4jClient
 from clients.redis_client import RedisClient
 from app import AppContext
+
+from services.candidate_service import CandidateService
+from services.entity_writer_service import EntityWriterService
+from services.search_service import SearchService
+from services.knowledge_graph_service import KnowledgeGraphService
+from services.sync_service import SyncService
+
 from models.persona import (
     ClassifiedPersona, IdentityDimension, IndustryDimension,
     LocationDimension, CommodityDimension, BehavioralDimension,
@@ -38,15 +44,6 @@ def mysql_client(config):
     """MySQL client in mock mode (in-memory dict)."""
     client = MySQLClient(config.mysql)
     client._using_mock = True
-    return client
-
-
-@pytest.fixture
-def milvus_client(config):
-    """Milvus client in mock mode."""
-    client = MilvusClient(config.milvus)
-    client._using_mock = True
-    client._embed_provider = "none"
     return client
 
 
@@ -80,12 +77,36 @@ def llm_client(config):
 
 
 @pytest.fixture
-def app_context(config, mysql_client, milvus_client, neo4j_client, redis_client, embedding_client, llm_client):
-    """Full AppContext with mock clients."""
+def app_context(config, mysql_client, neo4j_client, redis_client, embedding_client, llm_client):
+    """Full AppContext with mock clients and services."""
+    candidate_service = CandidateService(
+        entity_repo=neo4j_client, embedding=embedding_client, config=config,
+    )
+    entity_writer_service = EntityWriterService(
+        entity_repo=neo4j_client, relationship_repo=neo4j_client,
+        audit_repo=neo4j_client, cache=redis_client, config=config,
+    )
+    search_service = SearchService(
+        entity_repo=neo4j_client, relationship_repo=neo4j_client,
+        audit_repo=neo4j_client, search_repo=neo4j_client,
+        embedding=embedding_client, cache=redis_client,
+    )
+    knowledge_graph_service = KnowledgeGraphService(
+        entity_repo=neo4j_client, relationship_repo=neo4j_client, cache=redis_client,
+    )
+    sync_service = SyncService(
+        entity_repo=neo4j_client, relationship_repo=neo4j_client,
+        audit_repo=neo4j_client, cache=redis_client, embedding=embedding_client,
+    )
+
     return AppContext(
         config=config,
+        candidate_service=candidate_service,
+        entity_writer_service=entity_writer_service,
+        search_service=search_service,
+        knowledge_graph_service=knowledge_graph_service,
+        sync_service=sync_service,
         mysql=mysql_client,
-        milvus=milvus_client,
         embedding=embedding_client,
         llm=llm_client,
         neo4j=neo4j_client,

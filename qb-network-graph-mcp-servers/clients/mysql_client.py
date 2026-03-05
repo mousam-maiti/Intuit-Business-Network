@@ -1,21 +1,16 @@
 """
-MySQL client — source data reads + pending resolution writes.
+MySQL client — source data reads only.
 
-After the golden record migration to Neo4j (Phase 3), MySQL retains:
-  - Source tables: companies, vendors, customers, bills, invoices, payments
-  - Pending resolution: OLTP work queue for human review
-
-All golden record CRUD, bucket-key lookups, search, aggregate, audit, and
-relationship operations now live in Neo4j (neo4j_client.py).
+MySQL retains only raw OLTP source tables: companies, vendors, customers,
+bills, invoices, payments. All golden record operations live in Paimon (gold)
+and Neo4j (serving layer).
 """
 from __future__ import annotations
-import json
 import logging
 from contextlib import contextmanager
 from typing import Optional
 
 from config import MySQLConfig
-from models.audit import PendingResolution
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +23,12 @@ except ImportError:
 
 
 class MySQLClient:
-    """MySQL client for source data reads + pending resolution writes."""
+    """MySQL client for source data reads only."""
 
     def __init__(self, cfg: MySQLConfig):
         self._cfg = cfg
         self._pool = None
         self._using_mock = False
-
-        # In-memory fallback for pending resolution
-        self._mock_pending: list[dict] = []
 
     async def connect(self):
         """Initialize connection pool."""
@@ -104,29 +96,3 @@ class MySQLClient:
             cursor = conn.cursor(dictionary=True)
             cursor.execute("SELECT * FROM companies WHERE status = 'active'")
             return cursor.fetchall()
-
-    # ═══════════════════════════════════════════════════════════
-    # PENDING RESOLUTION (OLTP work queue)
-    # ═══════════════════════════════════════════════════════════
-
-    def write_pending_resolution(self, pending: PendingResolution) -> str:
-        if self._using_mock:
-            self._mock_pending.append(pending.model_dump())
-            return pending.match_id
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO pending_resolution (
-                    match_id, orphan_golden_id, candidate_golden_id,
-                    confidence, dimension_scores, reasoning, key_uncertainty,
-                    trigger_type, status, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', CURRENT_TIMESTAMP(3))
-            """, (
-                pending.match_id, pending.orphan_golden_id,
-                pending.candidate_golden_id, pending.confidence,
-                json.dumps(pending.dimension_scores, default=str),
-                pending.reasoning, pending.key_uncertainty,
-                pending.trigger_type,
-            ))
-            conn.commit()
-        return pending.match_id

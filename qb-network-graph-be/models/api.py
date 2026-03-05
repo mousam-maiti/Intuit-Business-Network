@@ -73,6 +73,7 @@ class PendingMatch(BaseModel):
 
 class ResolveRequest(BaseModel):
     resolution: str  # "accept" | "reject"
+    candidateGoldenId: Optional[str] = None  # Override: merge into this instead of AI-suggested
 
 
 class AdHocResolveRequest(BaseModel):

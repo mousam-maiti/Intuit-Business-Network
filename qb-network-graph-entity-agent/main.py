@@ -1,32 +1,46 @@
 """
 Entity Resolution Agent Service — FastAPI application.
 
-Endpoints:
-  POST /resolve       — resolve an orphan record
-  POST /re-evaluate   — re-evaluate a golden record after enrichment
-  GET  /health        — health check
-  GET  /stats         — runtime statistics
+Endpoints (all under /api/v1/):
+  POST /api/v1/resolve       — resolve an orphan record
+  POST /api/v1/re-evaluate   — re-evaluate a golden record after enrichment
+  GET  /api/v1/health        — health check
+  GET  /api/v1/stats         — runtime statistics
 
-v4: MCP integration. All tool calls (candidate evaluation, entity writing,
-    knowledge graph) go through the remote MCP server via Streamable HTTP.
-    Only the LLM client remains local (for ambiguous-case reasoning).
+v5: SOLID refactoring — abstract interfaces, DI, service layer, API versioning.
 """
 from __future__ import annotations
+
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from config import load_config
-from models.resolution import (
-    ResolutionRequest, ResolutionResponse,
-    ReEvaluationRequest, ReEvaluationResponse,
-)
+from exceptions import AgentError, AgentNotInitializedError
+
+# ── Clients ──────────────────────────────────────────────────
 from clients.mcp_client import MCPToolClient
 from clients.llm_client import LLMClient
-from orchestrator import Orchestrator
+from clients.mcp_candidate_finder import MCPCandidateFinder
+from clients.mcp_field_comparator import MCPFieldComparator
+from clients.mcp_similarity_provider import MCPSimilarityProvider
+from clients.gemini_llm_reasoner import GeminiLLMReasoner
+from clients.mcp_entity_store import MCPEntityStore
+from clients.mcp_audit_logger import MCPAuditLogger
+
+# ── Services ─────────────────────────────────────────────────
+from services.resolution_service import ResolutionService
+from services.reevaluation_service import ReEvaluationService
+
+# ── Routes ───────────────────────────────────────────────────
+from routes.v1.resolution import router as resolution_router
+from routes.v1.reevaluation import router as reevaluation_router
+from routes.v1.health import router as health_router
+
 from utils import telemetry
 
 try:
@@ -41,18 +55,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Global state ────────────────────────────────────────────
-orchestrator: Orchestrator | None = None
-_mcp: MCPToolClient | None = None
-_llm: LLMClient | None = None
-stats = {"requests": 0, "merges": 0, "creates": 0, "reviews": 0, "errors": 0, "start_time": 0}
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Wire all components on startup."""
-    global orchestrator, _mcp, _llm
-    stats["start_time"] = time.time()
+    """Wire all components on startup via dependency injection."""
+    app.state.stats = {
+        "requests": 0, "merges": 0, "creates": 0,
+        "reviews": 0, "errors": 0, "start_time": time.time(),
+    }
 
     logger.info("Loading config...")
     cfg = load_config()
@@ -67,25 +77,43 @@ async def lifespan(app: FastAPI):
         )
 
     # ── Connect to MCP Server ─────────────────────────────
-    # The MCP server owns all data clients (MySQL, Milvus, GraphDB,
-    # Embedding) and exposes them as tools. The agent only needs
-    # a single connection to the MCP server.
     logger.info(f"Connecting to MCP Server at {cfg.mcp_server.url}...")
     mcp = MCPToolClient(url=cfg.mcp_server.url, timeout_ms=cfg.mcp_server.timeout_ms)
     await mcp.connect()
-    _mcp = mcp
+    app.state.mcp_client = mcp
 
     # ── LLM stays local (not an MCP tool) ─────────────────
     llm = LLMClient(cfg.llm)
     await llm.connect()
-    _llm = llm
 
-    # ── Build orchestrator ────────────────────────────────
-    orchestrator = Orchestrator(
+    # ── Build interface implementations ───────────────────
+    finder = MCPCandidateFinder(mcp)
+    comparator = MCPFieldComparator(mcp)
+    similarity = MCPSimilarityProvider(mcp)
+    reasoner = GeminiLLMReasoner(llm)
+    store = MCPEntityStore(mcp)
+    audit = MCPAuditLogger(mcp)
+
+    app.state.llm_reasoner = reasoner
+
+    # ── Build services ────────────────────────────────────
+    app.state.resolution_service = ResolutionService(
+        finder=finder,
+        comparator=comparator,
+        similarity=similarity,
+        reasoner=reasoner,
+        store=store,
+        audit=audit,
         config=cfg,
-        mcp=mcp,
-        llm=llm,
     )
+    app.state.reevaluation_service = ReEvaluationService(
+        finder=finder,
+        comparator=comparator,
+        store=store,
+        config=cfg,
+    )
+
+    app.state.cfg = cfg
 
     logger.info("=" * 60)
     logger.info("Entity Resolution Agent Service READY")
@@ -117,64 +145,26 @@ if HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
 
 
-@app.post("/resolve", response_model=ResolutionResponse)
-async def resolve(request: ResolutionRequest):
-    """Resolve an orphan record: find matching golden record or create new."""
-    if not orchestrator:
-        raise HTTPException(503, "Agent not initialized")
+# ── Exception handlers ──────────────────────────────────────
 
-    stats["requests"] += 1
-    try:
-        response = await orchestrator.resolve(request)
-        if response.decision.value == "MERGE":
-            stats["merges"] += 1
-        elif response.decision.value == "NEW_ENTITY":
-            stats["creates"] += 1
-        elif response.decision.value == "REVIEW":
-            stats["reviews"] += 1
-        return response
-    except Exception as e:
-        stats["errors"] += 1
-        logger.exception(f"Resolution failed for {request.record_id}: {e}")
-        raise HTTPException(500, f"Resolution failed: {str(e)}")
+@app.exception_handler(AgentNotInitializedError)
+async def agent_not_initialized_handler(request: Request, exc: AgentNotInitializedError):
+    return JSONResponse(status_code=503, content={"error": exc.code, "detail": exc.message})
 
 
-@app.post("/re-evaluate", response_model=ReEvaluationResponse)
-async def re_evaluate(request: ReEvaluationRequest):
-    """Re-evaluate a golden record after enrichment added new bucket keys."""
-    if not orchestrator:
-        raise HTTPException(503, "Agent not initialized")
-
-    stats["requests"] += 1
-    try:
-        return await orchestrator.re_evaluate(request)
-    except Exception as e:
-        stats["errors"] += 1
-        logger.exception(f"Re-evaluation failed for {request.golden_record_id}: {e}")
-        raise HTTPException(500, f"Re-evaluation failed: {str(e)}")
+@app.exception_handler(AgentError)
+async def agent_error_handler(request: Request, exc: AgentError):
+    return JSONResponse(status_code=500, content={"error": exc.code, "detail": exc.message})
 
 
-@app.get("/health")
-async def health():
-    components = {}
-    if _mcp:
-        components["mcp_server"] = "connected" if _mcp.connected else "disconnected"
-        components["mcp_tools"] = len(_mcp._tool_names)
-    if _llm:
-        components["llm"] = "connected" if _llm.available else "unavailable"
-    overall = "healthy" if orchestrator else "starting"
-    return {
-        "status": overall,
-        "service": "entity-resolution-agent",
-        "version": "4.0.0",
-        "components": components,
-    }
+# ── Mount routes under /api/v1 ──────────────────────────────
 
+api = APIRouter(prefix="/api/v1")
+api.include_router(resolution_router)
+api.include_router(reevaluation_router)
+api.include_router(health_router)
 
-@app.get("/stats")
-async def get_stats():
-    uptime = time.time() - stats["start_time"] if stats["start_time"] else 0
-    return {**stats, "uptime_seconds": int(uptime)}
+app.include_router(api)
 
 
 if __name__ == "__main__":

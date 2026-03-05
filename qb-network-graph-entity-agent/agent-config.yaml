@@ -1,26 +1,27 @@
 # Entity Resolution Agent — Configuration
 # From design doc §5.3
 
-# Decision thresholds
+# Decision thresholds (tightened — safe with identity floor cap)
 thresholds:
-  auto_merge: 0.85
-  human_review: 0.60
-  new_entity: 0.60          # below review → NEW ENTITY
-  embedding_needed_low: 0.40
-  embedding_needed_high: 0.85
+  auto_merge: 0.82          # was 0.85
+  human_review: 0.55        # was 0.60 — widen deterministic zone
+  new_entity: 0.55          # was 0.60
+  embedding_needed_low: 0.45   # was 0.40 — skip more embedding calls
+  embedding_needed_high: 0.82  # was 0.85 — match new auto_merge
+  min_identity_score: 0.75     # name gate — below this, auto-create new entity
 
 # Disqualification rules (hard stops)
 disqualifiers:
   ein_mismatch: true
   state_mismatch: true
 
-# Dimension weights (must sum to 1.0)
+# Dimension weights (must sum to 1.0) — identity prioritized for Name/EIN
 weights:
-  identity: 0.35
-  industry: 0.25
-  location: 0.15
-  commodity: 0.15
-  behavioral: 0.10
+  identity: 0.50    # was 0.35
+  industry: 0.20    # was 0.25
+  location: 0.12    # was 0.15
+  commodity: 0.10   # was 0.15
+  behavioral: 0.08  # was 0.10
 
 # Cascade guard
 re_evaluation:

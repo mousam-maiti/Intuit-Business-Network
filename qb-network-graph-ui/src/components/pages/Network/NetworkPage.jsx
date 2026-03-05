@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Navigation, Plus, Network } from 'lucide-react';
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from 'recharts';
 import { QB } from '@/constants/colors';
-import { findPath } from '@/utils/graph';
+import { findPath, getRelType } from '@/utils/graph';
 import { getMonthlyVolume, getSupplyChain } from '@/api/relationships';
 import { getNativeOverrides, getNativeMerges } from '@/api/native';
 import { saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
@@ -93,8 +93,8 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networ
   }, [onSelect]);
 
   const rels = selectedEntity ? networkRelationships.filter((r) => r.source === selectedEntity.id || r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume) : [];
-  const vendorRels = rels.filter((r) => r.source === selectedEntity?.id);
-  const clientRels = rels.filter((r) => r.target === selectedEntity?.id);
+  const vendorRels = rels.filter((r) => getRelType(r, selectedEntity?.id) === 'vendor');
+  const clientRels = rels.filter((r) => getRelType(r, selectedEntity?.id) === 'client');
 
   return (
     <div className="flex flex-col h-full">
@@ -103,10 +103,10 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networ
         <h1 className="text-xl font-normal" style={{ color: QB.textPrimary }}>Business network</h1>
         <div className="flex items-center gap-3 text-xs">
           <div className="flex border rounded" style={{ borderColor: QB.cardBorder }}>
-            {[{ k: 'all', l: 'All' }, { k: 'vendor', l: 'Vendors' }, { k: 'client', l: 'Clients' }].map((f) => (
+            {[{ k: 'all', l: 'All', n: networkEntities.length }, { k: 'vendor', l: 'Vendors', n: vendorRels.length }, { k: 'client', l: 'Clients', n: clientRels.length }].map((f) => (
               <button key={f.k} onClick={() => setEdgeFilter(f.k)} className="px-2.5 py-1.5 text-xs transition-colors"
                 style={{ backgroundColor: edgeFilter === f.k ? QB.purple : 'white', color: edgeFilter === f.k ? 'white' : QB.textSecondary, borderRight: f.k !== 'client' ? '1px solid ' + QB.cardBorder : 'none' }}>
-                {f.l}
+                {f.l} ({f.n})
               </button>
             ))}
           </div>

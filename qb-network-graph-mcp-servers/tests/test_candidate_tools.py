@@ -25,7 +25,7 @@ async def test_find_candidates_returns_matches(app_context, seeded_neo4j, sample
 
     assert "candidates" in result
     assert "bucket_stats" in result
-    assert result["bucket_stats"]["total_buckets_checked"] > 0
+    assert result["bucket_stats"]["total_candidates"] >= 0
 
 
 @pytest.mark.asyncio

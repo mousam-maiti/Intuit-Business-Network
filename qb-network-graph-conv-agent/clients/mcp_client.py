@@ -59,7 +59,20 @@ class MCPToolClient:
         logger.info(f"MCP tools: {len(self._tool_names)} available")
 
     async def call_tool(self, name: str, arguments: dict) -> Any:
-        """Call an MCP tool and return the parsed result."""
+        """Call an MCP tool and return the parsed result.
+
+        Auto-reconnects once if the MCP session has expired.
+        """
+        try:
+            return await self._call_tool_inner(name, arguments)
+        except MCPError as e:
+            if "Session not found" in str(e):
+                logger.warning("MCP session expired — reconnecting...")
+                await self._reconnect()
+                return await self._call_tool_inner(name, arguments)
+            raise
+
+    async def _call_tool_inner(self, name: str, arguments: dict) -> Any:
         result = await self._rpc("tools/call", {"name": name, "arguments": arguments})
 
         if result.get("isError"):
@@ -71,6 +84,16 @@ class MCPToolClient:
             return json.loads(content)
         except (json.JSONDecodeError, TypeError):
             return content
+
+    async def _reconnect(self):
+        """Re-initialize the MCP session after expiration."""
+        self._session_id = None
+        try:
+            await self.connect()
+            logger.info("MCP session re-established successfully")
+        except Exception as e:
+            logger.error(f"MCP reconnection failed: {e}")
+            raise MCPError(f"MCP reconnection failed: {e}")
 
     async def close(self):
         if self._client:

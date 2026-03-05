@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useRef } from 'react';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { fmt } from '@/utils/format';
+import { getRelType } from '@/utils/graph';
 import { config } from '@/config/env';
 
 const CENTER_ID = config.currentEntityId;
@@ -138,8 +139,14 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
     const ids = new Set(allEntities.map(e => e.id));
     return allRelationships.filter(r => {
       if (!ids.has(r.source) || !ids.has(r.target)) return false;
-      if (edgeFilter === 'vendor' && r.source !== CENTER_ID) return false;
-      if (edgeFilter === 'client' && r.target !== CENTER_ID) return false;
+      if (edgeFilter === 'vendor') {
+        if (r.source !== CENTER_ID && r.target !== CENTER_ID) return false;
+        if (getRelType(r, CENTER_ID) !== 'vendor') return false;
+      }
+      if (edgeFilter === 'client') {
+        if (r.source !== CENTER_ID && r.target !== CENTER_ID) return false;
+        if (getRelType(r, CENTER_ID) !== 'client') return false;
+      }
       return true;
     });
   }, [allEntities, allRelationships, edgeFilter]);
@@ -253,7 +260,9 @@ export function NetworkGraph({ selectedId, onSelect, depth, pathNodes, pathMode,
           const ux = dx / dist, uy = dy / dist;
 
           const w = Math.max(1, (r.volume / mx) * 4);
-          const isVendor = r.source !== CENTER_ID && r.target === CENTER_ID;
+          const isVendor = (r.source === CENTER_ID || r.target === CENTER_ID)
+            ? getRelType(r, CENTER_ID) === 'vendor'
+            : r.relType === 'vendor';
           const color = isVendor ? VENDOR_COLOR : CLIENT_COLOR;
 
           const sourceInChain = scSet && scSet.has(r.source);

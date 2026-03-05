@@ -10,7 +10,7 @@
 #   ./demo.sh           # Full reset + pipeline + services
 #
 # Prerequisites:
-#   - Docker: qb-mysql, milvus-standalone, qb-neo4j, qb-redis running
+#   - Docker: qb-mysql, qb-neo4j, qb-redis running
 #   - Flink: installed ($FLINK_HOME set via qb-network-graph-cdc/.flink-env)
 #   - Python venvs: qb-seed-generator, qb-network-graph-be, qb-network-graph-mcp-servers,
 #                   qb-network-graph-conv-agent
@@ -137,12 +137,6 @@ if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-mysql$"; then
 fi
 ok "MySQL container running"
 
-if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^milvus-standalone$"; then
-    warn "Milvus container not running — vector search will use in-memory fallback"
-else
-    ok "Milvus container running"
-fi
-
 if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-neo4j$"; then
     fail "Neo4j container (qb-neo4j) not running — required as primary golden record store"
 else
@@ -181,7 +175,14 @@ if [ -d "$WAREHOUSE_PATH/network_graph.db" ]; then
     rm -rf "$WAREHOUSE_PATH/network_graph.db"
     ok "Deleted $WAREHOUSE_PATH/network_graph.db"
 else
-    info "Warehouse already clean"
+    info "network_graph.db already clean"
+fi
+
+if [ -d "$WAREHOUSE_PATH/gold.db" ]; then
+    rm -rf "$WAREHOUSE_PATH/gold.db"
+    ok "Deleted $WAREHOUSE_PATH/gold.db"
+else
+    info "gold.db already clean"
 fi
 
 # Clear Flink checkpoints
@@ -192,27 +193,7 @@ fi
 
 
 # ──────────────────────────────────────────────────────────
-step 2 "Clear Milvus collection"
-# ──────────────────────────────────────────────────────────
-
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^milvus-standalone$"; then
-    python3 -c "
-from pymilvus import connections, utility
-connections.connect(host='localhost', port='19530')
-if utility.has_collection('golden_records'):
-    utility.drop_collection('golden_records')
-    print('  Dropped golden_records collection')
-else:
-    print('  Collection already clean')
-connections.disconnect('default')
-" 2>/dev/null || warn "Could not clear Milvus (pymilvus not available — will auto-create on MCP start)"
-else
-    info "Milvus not running — skipping"
-fi
-
-
-# ──────────────────────────────────────────────────────────
-step "2b" "Clear Neo4j graph"
+step 2 "Clear Neo4j graph"
 # ──────────────────────────────────────────────────────────
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-neo4j$"; then
@@ -226,7 +207,7 @@ fi
 
 
 # ──────────────────────────────────────────────────────────
-step "2c" "Flush Redis cache"
+step "2b" "Flush Redis cache"
 # ──────────────────────────────────────────────────────────
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^qb-redis$"; then
@@ -299,9 +280,7 @@ step 6 "Seed QB source tables"
 # ──────────────────────────────────────────────────────────
 
 cd "$ROOT/qb-seed-generator"
-source venv/bin/activate 2>/dev/null || true
-python -m src.main seed
-deactivate 2>/dev/null || true
+venv/bin/python -m src.main seed
 cd "$ROOT"
 ok "QB source data seeded"
 
@@ -349,6 +328,17 @@ cat "$CDC_DIR/sql/03-paimon-bronze-tables.sql" >> "$DDL_FILE"
 "$FLINK_HOME/bin/sql-client.sh" -f "$DDL_FILE" >/dev/null 2>&1
 rm -f "$DDL_FILE"
 ok "Paimon catalog + bronze tables created"
+
+# Create gold tables (pending_resolution, connection_alerts, etc.)
+if [ -f "$CDC_DIR/sql/06-paimon-gold-tables.sql" ]; then
+    GOLD_FILE=$(mktemp /tmp/cdc-gold-XXXXXX.sql)
+    cat "$CDC_DIR/sql/01-create-paimon-catalog.sql" >> "$GOLD_FILE"
+    echo "" >> "$GOLD_FILE"
+    cat "$CDC_DIR/sql/06-paimon-gold-tables.sql" >> "$GOLD_FILE"
+    "$FLINK_HOME/bin/sql-client.sh" -f "$GOLD_FILE" >/dev/null 2>&1
+    rm -f "$GOLD_FILE"
+    ok "Paimon gold tables created"
+fi
 
 # Phase 2: Generate job files if needed
 JOBS_DIR="$CDC_DIR/sql/jobs"
@@ -434,13 +424,13 @@ ok "Job 2 submitted"
 step 11 "Wait for entity_connections data"
 # ──────────────────────────────────────────────────────────
 
-info "Waiting for entity_connections to have data..."
+info "Waiting for entity_connections identity data (Job 1)..."
 TIMEOUT=120
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
     DATA_FILES=$(find "$WAREHOUSE_PATH/network_graph.db/entity_connections/bucket-0" -name "data-*" 2>/dev/null | head -1)
     if [ -n "$DATA_FILES" ]; then
-        ok "Aggregation complete — entity_connections populated"
+        ok "Identity data populated"
         break
     fi
     sleep 5
@@ -448,7 +438,27 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
     echo -ne "  ${DIM}${ELAPSED}s...${NC}\r"
 done
 if [ $ELAPSED -ge $TIMEOUT ]; then
-    warn "Aggregation timeout — continuing anyway"
+    warn "Identity data timeout — continuing anyway"
+fi
+
+# Wait for Job 2 transaction aggregation to populate behavioral data.
+# Without this, entity connections lack total_volume/transaction_count
+# and all relationship edges in Neo4j end up with volume=0.
+info "Waiting for transaction aggregation (Job 2) — checking for multiple Paimon snapshots..."
+TIMEOUT=60
+ELAPSED=0
+while [ $ELAPSED -lt $TIMEOUT ]; do
+    SNAPSHOT_COUNT=$(find "$WAREHOUSE_PATH/network_graph.db/entity_connections/snapshot" -name "snapshot-*" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$SNAPSHOT_COUNT" -ge 2 ]; then
+        ok "Transaction data merged ($SNAPSHOT_COUNT snapshots — Job 1 + Job 2)"
+        break
+    fi
+    sleep 5
+    ELAPSED=$((ELAPSED + 5))
+    echo -ne "  ${DIM}${ELAPSED}s (snapshots: ${SNAPSHOT_COUNT:-0})...${NC}\r"
+done
+if [ $ELAPSED -ge $TIMEOUT ]; then
+    warn "Transaction aggregation wait timeout — relationship volumes may be $0"
 fi
 
 
@@ -488,7 +498,7 @@ nohup python main.py > /tmp/qb-entity-agent.log 2>&1 &
 echo "$!" >> "$PIDS_FILE"
 deactivate 2>/dev/null || true
 cd "$ROOT"
-wait_for_health "http://localhost:8085/health" "Entity Agent" 30 || fail "Entity Agent did not start"
+wait_for_health "http://localhost:8085/api/v1/health" "Entity Agent" 30 || fail "Entity Agent did not start"
 
 # Backend API (port 8087)
 info "Starting Backend API on :8087..."
@@ -525,7 +535,7 @@ step 14 "Run Classifier Orchestrator (stream mode + reset)"
 
 # Verify MCP + Entity Agent are up before starting
 lsof -iTCP:8083 -sTCP:LISTEN -P -n >/dev/null 2>&1 || fail "MCP Server not listening on :8083"
-curl -sf http://localhost:8085/health >/dev/null 2>&1 || fail "Entity Agent not healthy"
+curl -sf http://localhost:8085/api/v1/health >/dev/null 2>&1 || fail "Entity Agent not healthy"
 ok "MCP Server + Entity Agent ready"
 
 ORCH_DIR="$ROOT/qb-network-graph-classifier-orchestrator"
@@ -537,7 +547,7 @@ fi
 
 info "Starting Classifier Orchestrator in stream mode with --reset..."
 info "  Reads: Paimon entity_connections"
-info "  Writes: POST /resolve → Neo4j (golden records, relationships) + MySQL (pending_resolution)"
+info "  Writes: Paimon gold → MCP sync → Neo4j (golden records, relationships)"
 info "  Log: /tmp/qb-classifier.log"
 
 cd "$ORCH_DIR"
@@ -559,7 +569,7 @@ echo -e "${BOLD}  Service Status${NC}"
 echo -e "${DIM}  ──────────────────────────────────────────────${NC}"
 
 # Docker services
-for svc in "qb-neo4j|Neo4j" "qb-redis|Redis" "milvus-standalone|Milvus"; do
+for svc in "qb-neo4j|Neo4j" "qb-redis|Redis"; do
     name=$(echo "$svc" | cut -d'|' -f1)
     label=$(echo "$svc" | cut -d'|' -f2)
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"; then
@@ -574,7 +584,7 @@ for check in \
     "8080|UI|http://localhost:8080" \
     "8082|Conv Agent|http://localhost:8082" \
     "8083|MCP Server|http://localhost:8083" \
-    "8085|Entity Agent|http://localhost:8085/health" \
+    "8085|Entity Agent|http://localhost:8085/api/v1/health" \
     "8087|Backend API|http://localhost:8087/health"; do
 
     port=$(echo "$check" | cut -d'|' -f1)

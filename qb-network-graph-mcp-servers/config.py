@@ -92,7 +92,7 @@ class LLMConfig:
 @dataclass
 class EmbeddingConfig:
     provider: str = "gemini"
-    model: str = "text-embedding-004"
+    model: str = "gemini-embedding-001"
     dimension: int = 768
     task_type: str = "SEMANTIC_SIMILARITY"
     batch_size: int = 10
@@ -110,14 +110,6 @@ class MySQLConfig:
     password: str = "qb_admin_pass"
     database: str = "quickbooks"
     pool_size: int = 5
-
-
-@dataclass
-class MilvusConfig:
-    """Milvus — vector search for intuitive UI search."""
-    host: str = "localhost"
-    port: int = 19530
-    gemini_api_key: str = ""
 
 
 @dataclass
@@ -154,7 +146,6 @@ class AgentConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
-    milvus: MilvusConfig = field(default_factory=MilvusConfig)
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     buckets: BucketConfig = field(default_factory=BucketConfig)
@@ -192,7 +183,6 @@ def load_config(path: str | None = None) -> AgentConfig:
         llm=_build(LLMConfig, raw.get("llm")),
         embedding=_build(EmbeddingConfig, raw.get("embedding")),
         mysql=_build(MySQLConfig, raw.get("mysql")),
-        milvus=_build(MilvusConfig, raw.get("milvus")),
         neo4j=_build(Neo4jConfig, raw.get("neo4j")),
         redis=_build(RedisConfig, raw.get("redis")),
         buckets=BucketConfig(max_commodity_keywords=max_kw),
@@ -238,11 +228,6 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.mysql.password = _env("MYSQL_PASSWORD", cfg.mysql.password)
     cfg.mysql.database = _env("MYSQL_DATABASE", cfg.mysql.database)
     cfg.mysql.pool_size = _env("MYSQL_POOL_SIZE", cfg.mysql.pool_size, int)
-
-    # Milvus
-    cfg.milvus.host = _env("MILVUS_HOST", cfg.milvus.host)
-    cfg.milvus.port = _env("MILVUS_PORT", cfg.milvus.port, int)
-    cfg.milvus.gemini_api_key = _env("GEMINI_API_KEY", cfg.milvus.gemini_api_key)
 
     # Neo4j
     cfg.neo4j.uri = _env("NEO4J_URI", cfg.neo4j.uri)

@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, 
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
+import { getRelType } from '@/utils/graph';
 import { getEntities } from '@/api/entities';
 import { getAllRelationships, getMonthlyVolume } from '@/api/relationships';
 import { getPendingMatches } from '@/api/matching';
@@ -41,8 +42,8 @@ export default function DashboardPage({ onNavigate, selectedEntity }) {
   const sectorColors = ['#2CA01C', '#7C3AED', '#7c3aed', '#0077C5', '#E8710A', '#dc2626'];
 
   const typeData = [
-    { name: 'Vendors', value: relationships.filter((r) => r.source === selectedEntity?.id).length },
-    { name: 'Clients', value: relationships.filter((r) => r.target === selectedEntity?.id).length },
+    { name: 'Vendors', value: relationships.filter((r) => (r.source === selectedEntity?.id || r.target === selectedEntity?.id) && getRelType(r, selectedEntity?.id) === 'vendor').length },
+    { name: 'Clients', value: relationships.filter((r) => (r.source === selectedEntity?.id || r.target === selectedEntity?.id) && getRelType(r, selectedEntity?.id) === 'client').length },
   ];
 
   const topHubs = useMemo(() =>

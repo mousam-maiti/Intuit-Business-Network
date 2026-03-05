@@ -65,11 +65,30 @@ class EntityAgentConfig:
 
 
 @dataclass
+class FlinkSQLConfig:
+    url: str = "http://localhost:8081"
+    timeout: float = 30.0
+
+
+@dataclass
+class PaimonConfig:
+    warehouse_path: str = "/Users/mousammaiti/IntuitQB-StreamHouse"
+
+
+@dataclass
+class SyncConfig:
+    url: str = "http://localhost:8084"
+
+
+@dataclass
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     entity_agent: EntityAgentConfig = field(default_factory=EntityAgentConfig)
+    flink_sql: FlinkSQLConfig = field(default_factory=FlinkSQLConfig)
+    paimon: PaimonConfig = field(default_factory=PaimonConfig)
+    sync: SyncConfig = field(default_factory=SyncConfig)
 
 
 def _build(cls, data: dict):
@@ -93,6 +112,9 @@ def load_config(path: str | None = None) -> AppConfig:
         mysql=_build(MySQLConfig, raw.get("mysql")),
         neo4j=_build(Neo4jConfig, raw.get("neo4j")),
         entity_agent=_build(EntityAgentConfig, raw.get("entity_agent")),
+        flink_sql=_build(FlinkSQLConfig, raw.get("flink_sql")),
+        paimon=_build(PaimonConfig, raw.get("paimon")),
+        sync=_build(SyncConfig, raw.get("sync")),
     )
 
     # Env var overrides
@@ -114,5 +136,12 @@ def load_config(path: str | None = None) -> AppConfig:
 
     cfg.entity_agent.url = _env("ENTITY_AGENT_URL", cfg.entity_agent.url)
     cfg.entity_agent.timeout = _env("ENTITY_AGENT_TIMEOUT", cfg.entity_agent.timeout, int)
+
+    cfg.flink_sql.url = _env("FLINK_SQL_URL", cfg.flink_sql.url)
+    cfg.flink_sql.timeout = _env("FLINK_SQL_TIMEOUT", cfg.flink_sql.timeout, float)
+
+    cfg.paimon.warehouse_path = _env("PAIMON_WAREHOUSE_PATH", cfg.paimon.warehouse_path)
+
+    cfg.sync.url = _env("SYNC_URL", cfg.sync.url)
 
     return cfg

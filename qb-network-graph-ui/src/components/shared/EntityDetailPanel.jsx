@@ -552,7 +552,7 @@ function EntityViewMode({
         <Widget title={'VENDORS (' + vendorRels.length + ')'}>
           <div className="space-y-1.5">
             {vendorRels.slice(0, 4).map((rel, i) => {
-              const o = allEntities.find((e) => e.id === rel.target);
+              const o = allEntities.find((e) => e.id === (rel.source === globalEntity.id ? rel.target : rel.source));
               return (
                 <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b cursor-pointer hover:bg-gray-50 -mx-1 px-1 rounded"
                   style={{ borderColor: '#F0F0F0' }} onClick={() => o && onSelectEntity?.(o)}>
@@ -572,7 +572,7 @@ function EntityViewMode({
         <Widget title={'CLIENTS (' + clientRels.length + ')'}>
           <div className="space-y-1.5">
             {clientRels.slice(0, 4).map((rel, i) => {
-              const o = allEntities.find((e) => e.id === rel.source);
+              const o = allEntities.find((e) => e.id === (rel.source === globalEntity.id ? rel.target : rel.source));
               return (
                 <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b cursor-pointer hover:bg-gray-50 -mx-1 px-1 rounded"
                   style={{ borderColor: '#F0F0F0' }} onClick={() => o && onSelectEntity?.(o)}>

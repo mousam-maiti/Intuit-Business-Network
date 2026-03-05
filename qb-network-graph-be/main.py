@@ -1,7 +1,7 @@
 """
 QB Network Graph Backend API — FastAPI service.
 
-Serves 21 REST endpoints across 6 domains, querying MySQL directly.
+Serves 21 REST endpoints across 8 domains, querying Neo4j + MySQL.
 Start: python main.py
 """
 import logging
@@ -9,23 +9,47 @@ from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import load_config
-from clients.mysql_client import MySQLClient
-from clients.neo4j_client import Neo4jReadClient
+from exceptions import AppError, EntityNotFoundError, ClientUnavailableError
+
+# ── Repositories ─────────────────────────────────────────
+from repositories.neo4j_entity_repo import Neo4jEntityRepository
+from repositories.neo4j_relationship_repo import Neo4jRelationshipRepository
+from repositories.neo4j_search_repo import Neo4jSearchRepository
+from repositories.paimon_lineage_repo import PaimonLineageRepository
+from repositories.paimon_resolution_repo import PaimonResolutionRepository
+from repositories.mysql_connection_repo import MySQLConnectionRepository
+from repositories.mysql_native_repo import MySQLNativeRepository
+from repositories.paimon_alert_repo import PaimonAlertRepository
+from repositories.mysql_volume_repo import MySQLVolumeRepository
+
+# ── Clients ──────────────────────────────────────────────
+from clients.flink_sql_client import FlinkSQLClient
+from clients.paimon_client import PaimonClient
+
+# ── Services ─────────────────────────────────────────────
+from services.entity_service import EntityService
+from services.relationship_service import RelationshipService
+from services.search_service import SearchService
+from services.matching_service import MatchingService
+from services.connection_service import ConnectionService
+from services.native_service import NativeService
+from services.alert_service import AlertService
+from services.lineage_service import LineageService
 
 # ── Routes ───────────────────────────────────────────────
-
-from routes.entities import router as entities_router
-from routes.relationships import router as relationships_router
-from routes.search import router as search_router
-from routes.matching import router as matching_router
-from routes.connections import router as connections_router
-from routes.native import router as native_router
-from routes.alerts import router as alerts_router
-from routes.lineage import router as lineage_router
+from routes.v1.entities import router as entities_router
+from routes.v1.relationships import router as relationships_router
+from routes.v1.search import router as search_router
+from routes.v1.matching import router as matching_router
+from routes.v1.connections import router as connections_router
+from routes.v1.native import router as native_router
+from routes.v1.alerts import router as alerts_router
+from routes.v1.lineage import router as lineage_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,21 +57,98 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── DB driver imports (optional) ─────────────────────────
+try:
+    from mysql.connector import pooling
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
+
+try:
+    from neo4j import GraphDatabase
+    HAS_NEO4J = True
+except ImportError:
+    HAS_NEO4J = False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_config()
-    mysql = MySQLClient(cfg.mysql)
-    await mysql.connect()
-    neo4j = Neo4jReadClient(cfg.neo4j)
-    await neo4j.connect()
-    app.state.mysql = mysql
-    app.state.neo4j = neo4j
-    app.state.cfg = cfg
+
+    # ── Connect MySQL ────────────────────────────────────
+    mysql_pool = None
+    if HAS_MYSQL:
+        mysql_pool = pooling.MySQLConnectionPool(
+            pool_name="be_pool",
+            pool_size=cfg.mysql.pool_size,
+            host=cfg.mysql.host,
+            port=cfg.mysql.port,
+            user=cfg.mysql.user,
+            password=cfg.mysql.password,
+            database=cfg.mysql.database,
+            autocommit=False,
+        )
+        logger.info(f"MySQL connected: {cfg.mysql.host}:{cfg.mysql.port}/{cfg.mysql.database}")
+    else:
+        logger.warning("mysql-connector-python not installed — MySQL unavailable")
+
+    # ── Connect Neo4j ────────────────────────────────────
+    neo4j_driver = None
+    if HAS_NEO4J:
+        try:
+            neo4j_driver = GraphDatabase.driver(
+                cfg.neo4j.uri,
+                auth=(cfg.neo4j.user, cfg.neo4j.password),
+                max_connection_pool_size=cfg.neo4j.max_pool_size,
+            )
+            neo4j_driver.verify_connectivity()
+            logger.info(f"Neo4j connected: {cfg.neo4j.uri}")
+        except Exception as e:
+            logger.warning(f"Neo4j unavailable ({e}) — entity queries disabled")
+            neo4j_driver = None
+    else:
+        logger.warning("neo4j driver not installed — Neo4j unavailable")
+
+    # ── Connect Flink SQL Gateway (for writes only) ──────
+    flink_client = FlinkSQLClient(base_url=cfg.flink_sql.url, timeout=cfg.flink_sql.timeout)
+    flink_client.connect()
+
+    # ── Connect Paimon direct reader (for reads) ─────────
+    paimon_client = PaimonClient(warehouse_path=cfg.paimon.warehouse_path)
+    paimon_client.connect()
+
+    # ── Build repositories ───────────────────────────────
+    entity_repo = Neo4jEntityRepository(neo4j_driver, cfg.neo4j.database)
+    relationship_repo = Neo4jRelationshipRepository(neo4j_driver, cfg.neo4j.database, entity_repo)
+    search_repo = Neo4jSearchRepository(neo4j_driver, cfg.neo4j.database)
+
+    # Paimon-backed repos (pypaimon for reads, Flink SQL Gateway for writes)
+    lineage_repo = PaimonLineageRepository(paimon_client, sync_base_url=cfg.sync.url, flink_client=flink_client)
+    resolution_repo = PaimonResolutionRepository(paimon_client, flink_client=flink_client, sync_base_url=cfg.sync.url)
+    alert_repo = PaimonAlertRepository(paimon_client, flink_client=flink_client)
+
+    # MySQL-backed repos (OLTP source data only)
+    connection_repo = MySQLConnectionRepository(mysql_pool) if mysql_pool else None
+    native_repo = MySQLNativeRepository(mysql_pool) if mysql_pool else None
+    volume_repo = MySQLVolumeRepository(mysql_pool, flink_client) if mysql_pool else None
+
+    # ── Build services ───────────────────────────────────
+    app.state.entity_service = EntityService(entity_repo, fallback_repo=volume_repo)
+    app.state.relationship_service = RelationshipService(relationship_repo, volume_repo)
+    app.state.search_service = SearchService(search_repo)
+    app.state.matching_service = MatchingService(resolution_repo, entity_repo=entity_repo, relationship_repo=relationship_repo, sync_url=cfg.sync.url)
+    app.state.connection_service = ConnectionService(connection_repo, alert_repo)
+    app.state.native_service = NativeService(native_repo)
+    app.state.alert_service = AlertService(alert_repo)
+    app.state.lineage_service = LineageService(lineage_repo, entity_repo=entity_repo)
+
+    # ── HTTP client for entity agent ─────────────────────
     app.state.http_client = httpx.AsyncClient(
         base_url=cfg.entity_agent.url,
         timeout=cfg.entity_agent.timeout,
     )
+    app.state.cfg = cfg
+
     logger.info(
         f"QB Network Graph BE started  "
         f"MySQL={cfg.mysql.host}:{cfg.mysql.port}/{cfg.mysql.database}  "
@@ -55,13 +156,38 @@ async def lifespan(app: FastAPI):
         f"EntityAgent={cfg.entity_agent.url}  "
         f"port={cfg.server.port}"
     )
+
     yield
+
+    # ── Shutdown ─────────────────────────────────────────
     await app.state.http_client.aclose()
-    await neo4j.close()
-    await mysql.close()
+    paimon_client.close()
+    flink_client.close()
+    if neo4j_driver:
+        neo4j_driver.close()
+        logger.info("Neo4j driver closed")
+    logger.info("All connections released")
 
 
 app = FastAPI(title="QB Network Graph API", lifespan=lifespan)
+
+
+# ── Exception handlers ───────────────────────────────────
+
+@app.exception_handler(EntityNotFoundError)
+async def entity_not_found_handler(request: Request, exc: EntityNotFoundError):
+    return JSONResponse(status_code=404, content={"error": exc.code, "detail": exc.message})
+
+
+@app.exception_handler(ClientUnavailableError)
+async def client_unavailable_handler(request: Request, exc: ClientUnavailableError):
+    return JSONResponse(status_code=503, content={"error": exc.code, "detail": exc.message})
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    return JSONResponse(status_code=500, content={"error": exc.code, "detail": exc.message})
+
 
 # ── CORS ─────────────────────────────────────────────────
 

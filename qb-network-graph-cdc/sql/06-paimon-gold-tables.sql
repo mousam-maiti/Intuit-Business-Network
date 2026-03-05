@@ -85,6 +85,59 @@ CREATE TABLE IF NOT EXISTS relationships (
     'snapshot.num-retained'      = '200'
 );
 
+-- ── Pending Resolution ───────────────────────────────────────
+-- Human review work queue. Replaces MySQL pending_resolution table.
+-- deduplicate merge engine → UPSERT on match_id (status updates).
+
+CREATE TABLE IF NOT EXISTS pending_resolution (
+    match_id             STRING,
+    orphan_golden_id     STRING,
+    candidate_golden_id  STRING,
+    confidence           DECIMAL(4, 3),
+    dimension_scores     STRING,           -- JSON object
+    reasoning            STRING,
+    key_uncertainty      STRING,
+    trigger_type         STRING,           -- AI_AGENT | RE_EVALUATION | HUMAN
+    status               STRING,           -- PENDING | MERGED | REJECTED
+    reviewer             STRING,
+    reviewed_at          TIMESTAMP(3),
+    created_at           TIMESTAMP(3),
+    PRIMARY KEY (match_id) NOT ENFORCED
+) WITH (
+    'merge-engine'               = 'deduplicate',
+    'bucket'                     = '4',
+    'tag.automatic-creation'     = 'watermark',
+    'tag.num-retained-max'       = '365',
+    'snapshot.time-retained'     = '168h',
+    'snapshot.num-retained'      = '200'
+);
+
+-- ── Connection Alerts ────────────────────────────────────────
+-- Connection lifecycle alerts (UI notifications).
+-- Replaces MySQL connection_alerts table.
+
+CREATE TABLE IF NOT EXISTS connection_alerts (
+    alert_id             STRING,
+    connection_id        STRING,
+    user_id              STRING,
+    alert_type           STRING,           -- connection_added | entity_created | entity_merged | merge_review
+    title                STRING,
+    message              STRING,
+    entity_name          STRING,
+    target_entity_id     STRING,
+    confidence           DECIMAL(4, 3),
+    dismissed            BOOLEAN,
+    created_at           TIMESTAMP(3),
+    PRIMARY KEY (alert_id) NOT ENFORCED
+) WITH (
+    'merge-engine'               = 'deduplicate',
+    'bucket'                     = '4',
+    'tag.automatic-creation'     = 'watermark',
+    'tag.num-retained-max'       = '365',
+    'snapshot.time-retained'     = '168h',
+    'snapshot.num-retained'      = '200'
+);
+
 -- ── Resolution Audit ───────────────────────────────────────
 -- Append-only log of every entity resolution decision.
 -- No updates — each audit entry is immutable once written.

@@ -5,7 +5,7 @@ import tempfile
 import yaml
 from config import (
     _env, _build, load_config,
-    ServerConfig, Thresholds, Weights, MySQLConfig, MilvusConfig,
+    ServerConfig, Thresholds, Weights, MySQLConfig,
     AgentConfig, LLMConfig, EmbeddingConfig, Neo4jConfig, RedisConfig,
     BucketConfig, ReEvaluation,
 )
@@ -99,11 +99,6 @@ class TestDataclassDefaults:
         assert c.host == "localhost"
         assert c.port == 3306
 
-    def test_milvus_config(self):
-        c = MilvusConfig()
-        assert c.host == "localhost"
-        assert c.port == 19530
-
     def test_neo4j_config(self):
         c = Neo4jConfig()
         assert c.uri == "bolt://localhost:7687"
@@ -142,8 +137,8 @@ class TestLoadConfig:
     # Env vars loaded from .env override YAML; clear them for YAML-only tests.
     _ENV_OVERRIDES = [
         "MCP_SERVER_HOST", "MCP_SERVER_PORT", "MYSQL_HOST", "MYSQL_PORT",
-        "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "MILVUS_HOST",
-        "MILVUS_PORT", "GEMINI_API_KEY", "THRESHOLD_AUTO_MERGE",
+        "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE",
+        "GEMINI_API_KEY", "THRESHOLD_AUTO_MERGE",
     ]
 
     def _clear_env(self, monkeypatch):
@@ -157,7 +152,6 @@ class TestLoadConfig:
             "thresholds": {"auto_merge": 0.90},
             "weights": {"identity": 0.40},
             "mysql": {"host": "db.example.com", "port": 3307},
-            "milvus": {"host": "milvus.example.com"},
             "buckets": {"max_commodity_keywords": 5},
         }
         config_file = tmp_path / "test-config.yaml"
@@ -169,7 +163,6 @@ class TestLoadConfig:
         assert cfg.thresholds.auto_merge == 0.90
         assert cfg.weights.identity == 0.40
         assert cfg.mysql.host == "db.example.com"
-        assert cfg.milvus.host == "milvus.example.com"
         assert cfg.buckets.max_commodity_keywords == 5
 
     def test_empty_yaml(self, tmp_path, monkeypatch):
@@ -221,7 +214,6 @@ class TestLoadConfig:
             "neo4j": {"uri": "bolt://neo4j-host:7687", "password": "test_pass"},
             "redis": {"host": "redis-host", "port": 6380},
             "mysql": {"host": "m"},
-            "milvus": {"host": "v"},
             "buckets": {"max_commodity_keywords": 10},
         }
         config_file = tmp_path / "full.yaml"

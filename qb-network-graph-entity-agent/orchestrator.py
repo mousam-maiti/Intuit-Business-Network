@@ -3,14 +3,12 @@ Entity Resolution Orchestrator — the agent's brain.
 
 Calls MCP server tools via Streamable HTTP instead of in-process class methods.
 
-Escalation strategy:
-  Step 1: find_candidates → if 0 → create. If found → Step 2.
-  Step 2: compare_fields per candidate → if >0.85 → merge. If all <0.40 → create.
-          Ambiguous 0.40-0.85 → Step 3.
-  Step 3: semantic_similarity → if pushes >0.85 → merge. If <0.40 → create.
-          Still ambiguous → Step 4.
-  Step 4: LLM reasoning → final decision (MERGE/REVIEW/NEW_ENTITY).
-  Step 5: Write action + log_decision (always).
+Escalation strategy (3 steps):
+  Step 1: find_candidates (vector search + identity anchors) → if 0 → create.
+  Step 2: compare_fields + blend vector score → if >0.85 → merge.
+          All <0.40 → create. Ambiguous → Step 3.
+  Step 3: LLM reasoning → final decision (MERGE/REVIEW/NEW_ENTITY).
+  Write action + log_decision (always).
 
 v4: All tool calls go through MCPToolClient → MCP server at :8081.
     Only LLM reasoning stays local.
@@ -83,7 +81,7 @@ class Orchestrator:
                 candidates = result["candidates"]
                 step_ms = result.get("duration_ms", int((time.time() - t0) * 1000))
                 s1.set_attribute("candidates_found", len(candidates))
-                s1.set_attribute("buckets_checked", result["bucket_stats"]["total_buckets_checked"])
+                s1.set_attribute("buckets_checked", result["bucket_stats"].get("total_candidates", 0))
                 telemetry.record_step_duration("find_candidates", step_ms, "mcp_server")
                 telemetry.record_candidate_count(len(candidates))
 
@@ -93,7 +91,7 @@ class Orchestrator:
                 duration_ms=step_ms,
                 details={
                     "candidates_found": len(candidates),
-                    "buckets_checked": result["bucket_stats"]["total_buckets_checked"],
+                    "buckets_checked": result["bucket_stats"].get("total_candidates", 0),
                 },
             ))
 
@@ -106,7 +104,9 @@ class Orchestrator:
                 root_span.set_attribute("decision", resp.decision.value)
                 return resp
 
-            # ── Step 2: Compare each candidate (MCP tool) ─────────
+            # ── Step 2: Compare + score each candidate ─────────────
+            # Blends deterministic field comparison with vector similarity
+            # from Step 1 into a single combined score.
             scored: list[CandidateMatch] = []
             for cand in candidates:
                 with telemetry.span("step.compare_fields", {"candidate": cand["golden_record_id"]}) as s2:
@@ -121,7 +121,7 @@ class Orchestrator:
                     s2.set_attribute("disqualified", comparison.disqualified)
                     telemetry.record_step_duration("compare_fields", cmp_ms, "mcp_server")
 
-                step = EvaluationStep(
+                chain.append(EvaluationStep(
                     step="compare_fields",
                     tool_called="mcp:compare_fields",
                     candidate=cand["golden_record_id"],
@@ -130,21 +130,53 @@ class Orchestrator:
                     duration_ms=cmp_ms,
                     details={"disqualification_reason": comparison.disqualification_reason}
                     if comparison.disqualified else {},
-                )
-                chain.append(step)
+                ))
 
                 if comparison.disqualified:
                     continue
+
+                # Name gate: skip candidates where the actual name similarity
+                # (Jaro-Winkler) is below threshold — even if EIN/phone/email
+                # pushed the aggregate identity score higher.
+                name_sim = comparison.identity.details.get("name_similarity", 0.0)
+                if name_sim < self._cfg.thresholds.min_identity_score:
+                    chain.append(EvaluationStep(
+                        step="name_gate_skip",
+                        tool_called="orchestrator",
+                        candidate=cand["golden_record_id"],
+                        score=name_sim,
+                        details={"reason": f"name_similarity {name_sim:.2f} < {self._cfg.thresholds.min_identity_score}"},
+                    ))
+                    continue
+
+                # Blend in vector score from find_candidates
+                vector_score = _extract_vector_score(cand)
+                if vector_score is not None and comparison.identity.score >= 0.55:
+                    combined = round(
+                        (comparison.composite * 0.6) + (vector_score * 0.4), 4
+                    )
+                elif vector_score is not None:
+                    combined = round(
+                        (comparison.composite * 0.85) + (vector_score * 0.15), 4
+                    )
+                else:
+                    combined = comparison.composite
 
                 cm = CandidateMatch(
                     golden_record_id=cand["golden_record_id"],
                     canonical_name=cand["canonical_name"],
                     comparison=comparison,
-                    combined_score=comparison.composite,
+                    combined_score=combined,
                 )
+                if vector_score is not None:
+                    cm.similarity = SimilarityResult(
+                        composite_similarity=vector_score,
+                        model_used="neo4j_vector",
+                        inference_ms=0,
+                    )
 
                 # Above auto-merge threshold → immediate merge
-                if comparison.composite > self._cfg.thresholds.auto_merge:
+                if combined > self._cfg.thresholds.auto_merge:
                     cm.match_level = MatchLevel.DETERMINISTIC
                     resp = await self._merge(
                         request, persona, cm, chain, llm_calls, embedding_calls, start,
@@ -155,7 +187,7 @@ class Orchestrator:
 
                 scored.append(cm)
 
-            # All disqualified or below 0.40 → create new
+            # All disqualified, name-gated, or below threshold → create new
             ambiguous = [c for c in scored if c.combined_score >= self._cfg.thresholds.embedding_needed_low]
             if not ambiguous:
                 resp = await self._create_new(
@@ -165,72 +197,10 @@ class Orchestrator:
                 root_span.set_attribute("decision", resp.decision.value)
                 return resp
 
-            # ── Step 3: Embedding for ambiguous candidates (MCP) ──
-            for cm in ambiguous:
-                cand_data = next(
-                    (c for c in candidates if c["golden_record_id"] == cm.golden_record_id),
-                    None,
-                )
-                if not cand_data:
-                    continue
-
-                with telemetry.span("step.semantic_similarity", {"candidate": cm.golden_record_id}) as s3:
-                    t2 = time.time()
-                    sim_dict = await self._mcp.call_tool("semantic_similarity", {
-                        "orphan_persona": persona.model_dump(),
-                        "candidate": cand_data,
-                    })
-                    similarity = SimilarityResult.model_validate(sim_dict)
-                    embedding_calls += 1
-                    telemetry.record_embedding_call(similarity.model_used, True)
-                    s3.set_attribute("composite_similarity", similarity.composite_similarity)
-                    s3.set_attribute("model", similarity.model_used)
-                    telemetry.record_step_duration("semantic_similarity", similarity.inference_ms, "mcp_server")
-
-                chain.append(EvaluationStep(
-                    step="semantic_similarity",
-                    tool_called="mcp:semantic_similarity",
-                    candidate=cm.golden_record_id,
-                    score=similarity.composite_similarity,
-                    duration_ms=similarity.inference_ms,
-                    details={"model": similarity.model_used},
-                ))
-
-                cm.similarity = similarity
-
-                # Combine deterministic + embedding scores
-                # Dampen embedding influence when identity is weak — industry
-                # embeddings cluster same-sector businesses, confirming "same
-                # industry" not "same entity".
-                if cm.comparison.identity.score < 0.55:
-                    combined = (cm.comparison.composite * 0.85) + (similarity.composite_similarity * 0.15)
-                else:
-                    combined = (cm.comparison.composite * 0.6) + (similarity.composite_similarity * 0.4)
-                cm.combined_score = round(combined, 4)
-
-                if combined > self._cfg.thresholds.auto_merge:
-                    cm.match_level = MatchLevel.EMBEDDING
-                    resp = await self._merge(
-                        request, persona, cm, chain, llm_calls, embedding_calls, start,
-                    )
-                    root_span.set_attribute("decision", resp.decision.value)
-                    root_span.set_attribute("match_level", "EMBEDDING")
-                    return resp
-
-            # All still below 0.40 after embedding → create new
-            still_ambiguous = [c for c in ambiguous if c.combined_score >= self._cfg.thresholds.embedding_needed_low]
-            if not still_ambiguous:
-                resp = await self._create_new(
-                    request, persona, chain, llm_calls, embedding_calls, start,
-                    reason="All candidates below threshold after embedding",
-                )
-                root_span.set_attribute("decision", resp.decision.value)
-                return resp
-
-            # ── Step 4: LLM reasoning (local — not MCP) ───────────
+            # ── Step 3: LLM reasoning (local — not MCP) ───────────
             # Cascade guard: if chain_depth >= 3, force REVIEW
             if request.chain_depth >= self._cfg.re_evaluation.force_review_at_depth:
-                best = max(still_ambiguous, key=lambda c: c.combined_score)
+                best = max(ambiguous, key=lambda c: c.combined_score)
                 resp = await self._submit_review(
                     request, persona, best, chain, llm_calls, embedding_calls, start,
                     reason=f"Cascade guard: chain_depth={request.chain_depth} >= {self._cfg.re_evaluation.force_review_at_depth}",
@@ -241,7 +211,7 @@ class Orchestrator:
                 return resp
 
             # Build evidence for LLM
-            evidence = self._build_llm_evidence(persona, still_ambiguous, chain)
+            evidence = self._build_llm_evidence(persona, ambiguous, chain)
             with telemetry.span("step.llm_reasoning") as s4:
                 t3 = time.time()
                 llm_result = await asyncio.to_thread(self._llm.reason, evidence)
@@ -272,7 +242,7 @@ class Orchestrator:
 
             if llm_decision == "MERGE" and llm_target:
                 target_cm = next(
-                    (c for c in still_ambiguous if c.golden_record_id == llm_target), None
+                    (c for c in ambiguous if c.golden_record_id == llm_target), None
                 )
                 if target_cm:
                     target_cm.combined_score = llm_confidence
@@ -293,7 +263,7 @@ class Orchestrator:
                 return resp
 
             # Default: REVIEW
-            best = max(still_ambiguous, key=lambda c: c.combined_score)
+            best = max(ambiguous, key=lambda c: c.combined_score)
             resp = await self._submit_review(
                 request, persona, best, chain, llm_calls, embedding_calls, start,
                 reason=llm_result.get("reasoning", "LLM recommended review"),
@@ -383,6 +353,11 @@ class Orchestrator:
             if comparison.disqualified or comparison.composite < self._cfg.thresholds.embedding_needed_low:
                 continue
 
+            # Name gate: skip candidates with weak name similarity
+            name_sim = comparison.identity.details.get("name_similarity", 0.0)
+            if name_sim < self._cfg.thresholds.min_identity_score:
+                continue
+
             # Above merge threshold and chain_depth allows
             if (comparison.composite > self._cfg.thresholds.auto_merge
                     and request.chain_depth < self._cfg.re_evaluation.force_review_at_depth):
@@ -423,7 +398,7 @@ class Orchestrator:
                 "confidence": candidate.combined_score,
                 "dimension_scores": _extract_dim_scores(candidate).__dict__,
             },
-            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "company_id": str(request.company_id),
             "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
@@ -484,7 +459,7 @@ class Orchestrator:
             "orphan_record_id": request.record_id,
             "orphan_persona": persona.model_dump() if hasattr(persona, "model_dump") else persona,
             "creation_reasoning": {"trigger": "AI_AGENT_NEW", "reasoning": reason},
-            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "company_id": str(request.company_id),
             "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
@@ -547,7 +522,7 @@ class Orchestrator:
                 "key_uncertainty": key_uncertainty,
                 "trigger_type": "AI_AGENT_LLM" if llm_calls > 0 else "AI_AGENT_EMBEDDING",
             },
-            "company_id": str(request.company_id) if request.company_id is not None else None,
+            "company_id": str(request.company_id),
             "record_type": request.record_type,
         })
         chain.append(EvaluationStep(
@@ -678,6 +653,17 @@ class Orchestrator:
 
 
 # ── Utility functions ───────────────────────────────────────
+
+def _extract_vector_score(cand_data: dict) -> float | None:
+    """Extract vector similarity score from matched_via_buckets if present."""
+    for bucket in cand_data.get("matched_via_buckets", []):
+        if isinstance(bucket, str) and bucket.startswith("vector:"):
+            try:
+                return float(bucket.split(":", 1)[1])
+            except (ValueError, IndexError):
+                continue
+    return None
+
 
 def _extract_dim_scores(cm: CandidateMatch) -> DimensionScores:
     if cm.comparison:

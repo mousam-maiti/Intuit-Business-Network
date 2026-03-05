@@ -3,6 +3,7 @@ MCP Server entry point.
 
 Imports all tool modules to register @mcp.tool() decorators,
 then runs the FastMCP server with Streamable HTTP transport.
+Also mounts sync HTTP endpoints for Paimon → Neo4j data push.
 
 Usage:
     python server.py                        # Run server on configured port
@@ -10,6 +11,7 @@ Usage:
 """
 import logging
 import sys
+import threading
 
 # Configure logging before any imports that use it
 logging.basicConfig(
@@ -33,11 +35,68 @@ from config import load_config
 logger.info("All 19 tools registered")
 
 
+def _start_sync_api(config):
+    """Run the sync HTTP API on port MCP_PORT + 1 in a background thread."""
+    import uvicorn
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from routes.sync import router as sync_router
+    from services.sync_service import SyncService
+    from services.candidate_service import CandidateService
+    from clients.neo4j_client import Neo4jClient
+    from clients.redis_client import RedisClient
+    import asyncio
+
+    sync_app = FastAPI(title="MCP Sync API")
+    sync_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    )
+    sync_app.include_router(sync_router)
+
+    @sync_app.on_event("startup")
+    async def startup():
+        from clients.embedding_client import EmbeddingClient
+        neo4j = Neo4jClient(config.neo4j)
+        redis = RedisClient(config.redis)
+        embedding = EmbeddingClient(config.embedding)
+        await neo4j.connect()
+        await redis.connect()
+        await embedding.connect()
+        sync_service = SyncService(
+            entity_repo=neo4j, relationship_repo=neo4j,
+            audit_repo=neo4j, cache=redis, embedding=embedding,
+        )
+        candidate_service = CandidateService(
+            entity_repo=neo4j, embedding=embedding, config=config,
+        )
+        sync_app.state.sync_service = sync_service
+        sync_app.state.candidate_service = candidate_service
+        sync_app.state.neo4j = neo4j
+        sync_app.state.redis = redis
+        logger.info(f"Sync API started on port {config.server.port + 1}")
+
+    @sync_app.on_event("shutdown")
+    async def shutdown():
+        if hasattr(sync_app.state, "neo4j"):
+            await sync_app.state.neo4j.close()
+        if hasattr(sync_app.state, "redis"):
+            await sync_app.state.redis.close()
+
+    sync_port = config.server.port + 1
+    uvicorn.run(sync_app, host=config.server.host, port=sync_port, log_level="info")
+
+
 def main():
     config = load_config()
 
+    # Start sync API in background thread
+    sync_thread = threading.Thread(target=_start_sync_api, args=(config,), daemon=True)
+    sync_thread.start()
+
     logger.info(f"Starting MCP Server: {config.server.name}")
     logger.info(f"Transport: Streamable HTTP on {config.server.host}:{config.server.port}")
+    logger.info(f"Sync API: HTTP on {config.server.host}:{config.server.port + 1}")
     logger.info("MCP Server READY")
 
     mcp.run(transport="streamable-http")

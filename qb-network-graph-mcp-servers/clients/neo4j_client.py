@@ -87,6 +87,8 @@ class Neo4jClient:
             "CREATE INDEX entity_zip3 IF NOT EXISTS FOR (e:Entity) ON (e.zip3)",
             "CREATE INDEX entity_city_state IF NOT EXISTS FOR (e:Entity) ON (e.city, e.state)",
             "CREATE FULLTEXT INDEX entity_name_ft IF NOT EXISTS FOR (e:Entity) ON EACH [e.canonical_name]",
+            # Vector index for semantic candidate search
+            "CREATE VECTOR INDEX entity_embeddings IF NOT EXISTS FOR (e:Entity) ON (e.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}",
             # Audit trail
             "CREATE CONSTRAINT audit_id IF NOT EXISTS FOR (a:AuditEntry) REQUIRE a.audit_id IS UNIQUE",
             "CREATE INDEX audit_entity IF NOT EXISTS FOR (a:AuditEntry) ON (a.target_golden_id)",
@@ -150,6 +152,7 @@ class Neo4jClient:
             e.bucket_keys = $bucket_keys,
             e.source_records = $source_records,
             e.persona = $persona,
+            e.embedding = $embedding,
             e.updated_at = datetime()
         """
         params = self._gr_to_params(gr)
@@ -218,6 +221,7 @@ class Neo4jClient:
             "bucket_keys": _list_val(gr.get("bucket_keys", [])),
             "source_records": _list_val(gr.get("source_records", [])),
             "persona": json.dumps(persona, default=str) if persona else "{}",
+            "embedding": gr.get("embedding"),  # list[float] or None
         }
 
     def create_relationship(
@@ -662,6 +666,47 @@ class Neo4jClient:
             return results[:limit]
         except Exception as e:
             logger.error(f"Neo4j search_by_name failed: {e}")
+            return []
+
+    def vector_search(
+        self,
+        query_vector: list[float],
+        state_filter: str = None,
+        naics_filter: str = None,
+        top_k: int = 30,
+        min_score: float = 0.3,
+    ) -> list[dict]:
+        """Vector similarity search using Neo4j native vector index."""
+        if self._using_mock or not self._available:
+            return []
+
+        try:
+            with self._driver.session(database=self._cfg.database) as session:
+                # Build WHERE filters
+                filters = ["node.status <> 'MERGED'", "score >= $minScore"]
+                params = {"topK": top_k, "queryVector": query_vector, "minScore": min_score}
+                if state_filter:
+                    filters.append("node.state = $state")
+                    params["state"] = state_filter.upper()
+                if naics_filter:
+                    filters.append("node.naics_code STARTS WITH $naics")
+                    params["naics"] = naics_filter
+                where = " AND ".join(filters)
+
+                cypher = f"""
+                CALL db.index.vector.queryNodes('entity_embeddings', $topK, $queryVector)
+                YIELD node, score
+                WHERE {where}
+                RETURN node, score
+                """
+                results = []
+                for record in session.run(cypher, params):
+                    d = self._entity_to_summary(record["node"])
+                    d["score"] = float(record["score"])
+                    results.append(d)
+                return results
+        except Exception as e:
+            logger.error(f"Neo4j vector_search failed: {e}")
             return []
 
     def aggregate_golden_records(
@@ -1490,6 +1535,32 @@ class Neo4jClient:
             except Exception as e:
                 logger.debug(f"Seed cross-taxonomy failed: {e}")
         logger.info(f"Seeded {len(_CROSS_TAXONOMY_SEEDS)} cross-taxonomy commodity links")
+
+    # ── Interface aliases ──────────────────────────────────────
+
+    def upsert(self, entity: dict) -> None:
+        return self.upsert_entity(entity)
+
+    def get(self, entity_id: str) -> Optional[dict]:
+        return self.get_golden_record(entity_id)
+
+    def get_all(self, active_only: bool = True) -> list[dict]:
+        return self.get_all_golden_records(active_only)
+
+    def delete(self, entity_id: str) -> None:
+        return self.delete_entity(entity_id)
+
+    def create(self, source_id: str, target_id: str, rel_type: str, properties: dict = None) -> None:
+        return self.create_relationship(source_id, target_id, rel_type, properties)
+
+    def get_neighbors(self, entity_id: str, direction: str = "both", rel_type: str = None) -> list[dict]:
+        return self.get_entity_neighbors(entity_id)
+
+    def write(self, audit_dict: dict) -> str:
+        return self.write_audit(audit_dict)
+
+    def get_trail(self, entity_id: str, limit: int = 50) -> list[dict]:
+        return self.get_audit_trail(entity_id, limit)
 
 
 # ── Static cross-taxonomy data ────────────────────────────

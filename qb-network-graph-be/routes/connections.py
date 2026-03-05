@@ -121,11 +121,20 @@ async def resolve_connection_async(app, connection_id: str, payload: dict):
             "record_type": payload.get("connType", "vendor"),
             "company_id": 1,
             "classified_persona": classified_persona,
+            "fast_mode": True,
         }
 
-        resp = await http_client.post("/resolve", json=request_body)
+        # ── Two-pass: fast deterministic first, full if ambiguous ──
+        resp = await http_client.post("/api/v1/resolve", json=request_body)
         resp.raise_for_status()
         data = resp.json()
+
+        if data.get("decision") == "REVIEW" and data.get("agent_metadata", {}).get("fast_mode_deferred"):
+            logger.info(f"Fast pass deferred connection {connection_id} — retrying with full resolution")
+            request_body["fast_mode"] = False
+            resp = await http_client.post("/api/v1/resolve", json=request_body)
+            resp.raise_for_status()
+            data = resp.json()
 
         decision = data.get("decision", "NEW_ENTITY")
         confidence = data.get("confidence", 0.0)

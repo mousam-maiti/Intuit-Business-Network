@@ -17,11 +17,6 @@ def _make_ctx(app_context):
 async def test_search_entities_basic(app_context, seeded_neo4j):
     """search_entities should return results from seeded data."""
     app_context.neo4j = seeded_neo4j
-
-    # Seed Milvus mock with the golden record
-    gr_data = seeded_neo4j.get_golden_record("G-test0001")
-    app_context.milvus.upsert_golden_record(gr_data)
-
     ctx = _make_ctx(app_context)
 
     result = await search_entities(
@@ -39,9 +34,6 @@ async def test_search_entities_basic(app_context, seeded_neo4j):
 async def test_search_entities_with_filters(app_context, seeded_neo4j):
     """search_entities with city filter should filter results."""
     app_context.neo4j = seeded_neo4j
-    gr_data = seeded_neo4j.get_golden_record("G-test0001")
-    app_context.milvus.upsert_golden_record(gr_data)
-
     ctx = _make_ctx(app_context)
 
     # Search with wrong city — should filter out

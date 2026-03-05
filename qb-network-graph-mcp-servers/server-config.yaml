@@ -45,7 +45,7 @@ llm:
 embedding:
   provider: gemini
   model: gemini-embedding-001
-  dimension: 3072
+  dimension: 768
   task_type: SEMANTIC_SIMILARITY
   batch_size: 10
   fallback_provider: local
@@ -76,8 +76,3 @@ redis:
   password: ""
   db: 0
   default_ttl: 3600
-
-# Milvus (Vector Search)
-milvus:
-  host: localhost
-  port: 19530

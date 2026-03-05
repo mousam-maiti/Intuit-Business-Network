@@ -15,6 +15,7 @@ public class Config {
 
     public final String agentBaseUrl;
     public final int agentTimeoutMs;
+    public final String syncBaseUrl;
 
     public final String mode;           // "batch" or "stream"
     public final long pollIntervalMs;
@@ -33,6 +34,7 @@ public class Config {
 
         this.agentBaseUrl   = get(props, "agent.base-url", "http://localhost:8000");
         this.agentTimeoutMs = getInt(props, "agent.timeout-ms", 10_000);
+        this.syncBaseUrl    = get(props, "sync.base-url", "http://localhost:8084");
 
         this.mode           = get(props, "mode", "batch");
         this.pollIntervalMs = getLong(props, "poll.interval-ms", 2000);

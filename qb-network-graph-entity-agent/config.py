@@ -8,7 +8,6 @@ Priority (highest first):
 
 v3 changes:
   - Added MySQLConfig (golden record source of truth)
-  - Added MilvusConfig (vector search store)
   - RedisConfig kept but optional (Tier 2 read cache)
   - PaimonConfig kept for pipeline reads (entity_connections)
 """
@@ -45,20 +44,21 @@ def _env(key: str, default=None, cast=None):
 
 @dataclass
 class Thresholds:
-    auto_merge: float = 0.85
-    human_review: float = 0.60
-    new_entity: float = 0.60
-    embedding_needed_low: float = 0.40
-    embedding_needed_high: float = 0.85
+    auto_merge: float = 0.82        # was 0.85 — safe with identity floor cap
+    human_review: float = 0.55      # was 0.60 — widen deterministic zone
+    new_entity: float = 0.55        # was 0.60
+    embedding_needed_low: float = 0.45  # was 0.40 — skip more embedding calls
+    embedding_needed_high: float = 0.82 # was 0.85 — match new auto_merge
+    min_identity_score: float = 0.75    # name gate — below this, auto-create new entity
 
 
 @dataclass
 class Weights:
-    identity: float = 0.35
-    industry: float = 0.25
-    location: float = 0.15
-    commodity: float = 0.15
-    behavioral: float = 0.10
+    identity: float = 0.50    # was 0.35 — highest priority (Name/EIN)
+    industry: float = 0.20    # was 0.25
+    location: float = 0.12    # was 0.15
+    commodity: float = 0.10   # was 0.15
+    behavioral: float = 0.08  # was 0.10
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -124,18 +124,6 @@ class MySQLConfig:
 
 
 @dataclass
-class MilvusConfig:
-    """Milvus — vector search for intuitive UI search.
-
-    Written by entity_writer on every golden record mutation (Pattern A).
-    Read by UI search bar (hybrid multi-vector search).
-    """
-    host: str = "localhost"
-    port: int = 19530
-    gemini_api_key: str = ""
-
-
-@dataclass
 class RedisConfig:
     """Redis — Tier 2 read cache (NOT in write path).
 
@@ -195,7 +183,6 @@ class AgentConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     knowledge_graph: KnowledgeGraphConfig = field(default_factory=KnowledgeGraphConfig)
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
-    milvus: MilvusConfig = field(default_factory=MilvusConfig)
     mcp_server: MCPConfig = field(default_factory=MCPConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     paimon: PaimonConfig = field(default_factory=PaimonConfig)
@@ -236,7 +223,6 @@ def load_config(path: str | None = None) -> AgentConfig:
         embedding=_build(EmbeddingConfig, raw.get("embedding")),
         knowledge_graph=_build(KnowledgeGraphConfig, raw.get("knowledge_graph")),
         mysql=_build(MySQLConfig, raw.get("mysql")),
-        milvus=_build(MilvusConfig, raw.get("milvus")),
         mcp_server=_build(MCPConfig, raw.get("mcp_server")),
         redis=_build(RedisConfig, raw.get("redis")),
         paimon=_build(PaimonConfig, raw.get("paimon")),
@@ -252,6 +238,7 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.thresholds.new_entity = _env("THRESHOLD_NEW_ENTITY", cfg.thresholds.new_entity, float)
     cfg.thresholds.embedding_needed_low = _env("THRESHOLD_EMBEDDING_LOW", cfg.thresholds.embedding_needed_low, float)
     cfg.thresholds.embedding_needed_high = _env("THRESHOLD_EMBEDDING_HIGH", cfg.thresholds.embedding_needed_high, float)
+    cfg.thresholds.min_identity_score = _env("THRESHOLD_MIN_IDENTITY", cfg.thresholds.min_identity_score, float)
 
     # Weights
     cfg.weights.identity = _env("WEIGHT_IDENTITY", cfg.weights.identity, float)
@@ -287,11 +274,6 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.mysql.password = _env("MYSQL_PASSWORD", cfg.mysql.password)
     cfg.mysql.database = _env("MYSQL_DATABASE", cfg.mysql.database)
     cfg.mysql.pool_size = _env("MYSQL_POOL_SIZE", cfg.mysql.pool_size, int)
-
-    # Milvus
-    cfg.milvus.host = _env("MILVUS_HOST", cfg.milvus.host)
-    cfg.milvus.port = _env("MILVUS_PORT", cfg.milvus.port, int)
-    cfg.milvus.gemini_api_key = _env("GEMINI_API_KEY", cfg.milvus.gemini_api_key)
 
     # MCP Server
     cfg.mcp_server.url = _env("MCP_SERVER_URL", cfg.mcp_server.url)

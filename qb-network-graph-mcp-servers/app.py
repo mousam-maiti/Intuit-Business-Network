@@ -1,6 +1,9 @@
 """
 FastMCP instance + AppContext + lifespan.
 
+v2: SOLID refactoring — AppContext holds services instead of raw clients.
+    Interfaces define contracts. Services contain business logic.
+
 Circular import prevention:
   app.py          → creates FastMCP instance + AppContext (no tool imports)
   tools/*.py      → imports `mcp` from app.py, decorates functions with @mcp.tool()
@@ -15,12 +18,21 @@ from dataclasses import dataclass
 from mcp.server.fastmcp import FastMCP, Context
 
 from config import AgentConfig, load_config
+
+# ── Clients (concrete implementations) ────────────────────────
 from clients.mysql_client import MySQLClient
-from clients.milvus_client import MilvusClient
 from clients.embedding_client import EmbeddingClient
 from clients.llm_client import LLMClient
 from clients.neo4j_client import Neo4jClient
 from clients.redis_client import RedisClient
+
+# ── Services ─────────────────────────────────────────────────
+from services.candidate_service import CandidateService
+from services.entity_writer_service import EntityWriterService
+from services.search_service import SearchService
+from services.knowledge_graph_service import KnowledgeGraphService
+from services.sync_service import SyncService
+
 from models.persona import GoldenRecord, ClassifiedPersona
 from utils.bucket_keys import generate_bucket_keys
 
@@ -29,10 +41,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AppContext:
-    """Shared resources available to all MCP tools via lifespan context."""
+    """Shared resources available to all MCP tools via lifespan context.
+
+    Holds services (business logic) instead of raw clients.
+    Raw clients are still accessible for cases that need them directly.
+    """
     config: AgentConfig
+
+    # Services (preferred access path)
+    candidate_service: CandidateService
+    entity_writer_service: EntityWriterService
+    search_service: SearchService
+    knowledge_graph_service: KnowledgeGraphService
+    sync_service: SyncService
+
+    # Raw clients (for direct access when needed)
     mysql: MySQLClient
-    milvus: MilvusClient
     embedding: EmbeddingClient
     llm: LLMClient
     neo4j: Neo4jClient
@@ -40,12 +64,7 @@ class AppContext:
 
 
 def _bootstrap_company_golden_records(ctx: "AppContext"):
-    """Ensure all QB companies have QB_USER golden records before pipeline runs.
-
-    Reads company source data from MySQL, writes golden records to Neo4j (primary).
-    This eliminates the race condition where IC vendor records arrive before
-    any customer record triggers QB_USER creation via _ensure_company_golden_record.
-    """
+    """Ensure all QB companies have QB_USER golden records before pipeline runs."""
     companies = ctx.mysql.get_all_companies()
 
     created = 0
@@ -103,21 +122,20 @@ def _bootstrap_company_golden_records(ctx: "AppContext"):
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    """Initialize all clients on startup, tear down on shutdown."""
+    """Initialize all clients and services on startup, tear down on shutdown."""
     config = load_config()
     logger.info(f"Loading config: server={config.server.name} port={config.server.port}")
 
+    # ── Initialize raw clients ────────────────────────────────
     mysql = MySQLClient(config.mysql)
     neo4j = Neo4jClient(config.neo4j)
     redis = RedisClient(config.redis)
-    milvus = MilvusClient(config.milvus)
     embedding = EmbeddingClient(config.embedding)
     llm = LLMClient(config.llm)
 
     await mysql.connect()
     await neo4j.connect()
     await redis.connect()
-    await milvus.connect()
     await embedding.connect()
     await llm.connect()
 
@@ -126,15 +144,58 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         f"mysql={'mock' if mysql.using_mock else 'live'} "
         f"neo4j={'available' if neo4j.available else 'unavailable'} "
         f"redis={'available' if redis.available else 'unavailable'} "
-        f"milvus={'mock' if milvus.using_mock else 'live'} "
         f"embedding={'mock' if embedding.is_mock else 'live'} "
         f"llm={'available' if llm.available else 'unavailable'}"
     )
 
+    # ── Build services (depends on abstract interfaces) ───────
+    # Neo4jClient, MySQLClient, etc. implement the abstract interfaces
+    # by virtue of having the same method signatures.
+    candidate_service = CandidateService(
+        entity_repo=neo4j,
+        embedding=embedding,
+        config=config,
+    )
+
+    entity_writer_service = EntityWriterService(
+        entity_repo=neo4j,
+        relationship_repo=neo4j,
+        audit_repo=neo4j,
+        cache=redis,
+        config=config,
+    )
+
+    search_service = SearchService(
+        entity_repo=neo4j,
+        relationship_repo=neo4j,
+        audit_repo=neo4j,
+        search_repo=neo4j,
+        embedding=embedding,
+        cache=redis,
+    )
+
+    knowledge_graph_service = KnowledgeGraphService(
+        entity_repo=neo4j,
+        relationship_repo=neo4j,
+        cache=redis,
+    )
+
+    sync_service = SyncService(
+        entity_repo=neo4j,
+        relationship_repo=neo4j,
+        audit_repo=neo4j,
+        cache=redis,
+        embedding=embedding,
+    )
+
     ctx = AppContext(
         config=config,
+        candidate_service=candidate_service,
+        entity_writer_service=entity_writer_service,
+        search_service=search_service,
+        knowledge_graph_service=knowledge_graph_service,
+        sync_service=sync_service,
         mysql=mysql,
-        milvus=milvus,
         embedding=embedding,
         llm=llm,
         neo4j=neo4j,
@@ -149,7 +210,6 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         await mysql.close()
         await neo4j.close()
         await redis.close()
-        await milvus.close()
         logger.info("MCP Server shut down — all clients released")
 
 

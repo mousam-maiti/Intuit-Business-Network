@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
+import { getRelType } from '@/utils/graph';
 import { getEntities } from '@/api/entities';
 import { getAllRelationships } from '@/api/relationships';
 import { getAutoDetected, getManualConnections } from '@/api/connections';
@@ -197,8 +198,8 @@ export default function ConnectionsPage({ onNavigate }) {
               onOpenAI={() => onNavigate('assist', selectedEntity)}
               onMerge={() => setMergeSource(selectedEntity)}
               onSelectEntity={setSelectedEntity}
-              vendorRels={allRelationships.filter((r) => r.source === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
-              clientRels={allRelationships.filter((r) => r.target === selectedEntity.id).sort((a, b) => b.volume - a.volume)}
+              vendorRels={allRelationships.filter((r) => (r.source === selectedEntity.id || r.target === selectedEntity.id) && getRelType(r, selectedEntity.id) === 'vendor').sort((a, b) => b.volume - a.volume)}
+              clientRels={allRelationships.filter((r) => (r.source === selectedEntity.id || r.target === selectedEntity.id) && getRelType(r, selectedEntity.id) === 'client').sort((a, b) => b.volume - a.volume)}
               allEntities={allEntities}
             />
           </div>

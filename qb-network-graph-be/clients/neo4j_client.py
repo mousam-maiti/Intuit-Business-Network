@@ -170,9 +170,9 @@ class Neo4jReadClient:
 
         cypher += """
             WITH e
-            OPTIONAL MATCH ()-[vin]->(e)
-            OPTIONAL MATCH (e)-[vout]->()
-            WITH e, count(DISTINCT vin) AS vendor_count, count(DISTINCT vout) AS client_count
+            OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+            OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+            WITH e, count(DISTINCT bf) AS vendor_count, count(DISTINCT st) AS client_count
             RETURN e, vendor_count, client_count
             ORDER BY e.canonical_name
         """
@@ -196,9 +196,9 @@ class Neo4jReadClient:
             return None
         cypher = """
             MATCH (e:Entity {id: $id})
-            OPTIONAL MATCH ()-[vin]->(e)
-            OPTIONAL MATCH (e)-[vout]->()
-            RETURN e, count(DISTINCT vin) AS vendor_count, count(DISTINCT vout) AS client_count
+            OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+            OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+            RETURN e, count(DISTINCT bf) AS vendor_count, count(DISTINCT st) AS client_count
         """
         record = self._run_single(cypher, {"id": entity_id})
         if not record or not record.get("e"):
@@ -251,7 +251,7 @@ class Neo4jReadClient:
             cypher = """
                 MATCH (a:Entity)-[r]->(b:Entity)
                 WHERE a.id = $cid OR b.id = $cid
-                RETURN a.id AS source, b.id AS target,
+                RETURN a.id AS source, b.id AS target, type(r) AS rel_type,
                        r.volume AS volume, r.count AS count,
                        coalesce(r.status, 'active') AS status
             """
@@ -259,7 +259,7 @@ class Neo4jReadClient:
         else:
             cypher = """
                 MATCH (a:Entity)-[r]->(b:Entity)
-                RETURN a.id AS source, b.id AS target,
+                RETURN a.id AS source, b.id AS target, type(r) AS rel_type,
                        r.volume AS volume, r.count AS count,
                        coalesce(r.status, 'active') AS status
             """
@@ -273,7 +273,7 @@ class Neo4jReadClient:
         cypher = """
             MATCH (a:Entity)-[r]->(b:Entity)
             WHERE a.id = $id OR b.id = $id
-            RETURN a.id AS source, b.id AS target,
+            RETURN a.id AS source, b.id AS target, type(r) AS rel_type,
                    r.volume AS volume, r.count AS count,
                    coalesce(r.status, 'active') AS status
         """
@@ -289,9 +289,11 @@ class Neo4jReadClient:
             status = "dormant"
         else:
             status = status.lower()
+        rel_type = row.get("rel_type", "")
         return {
             "source": row.get("source"),
             "target": row.get("target"),
+            "relType": "vendor" if rel_type == "BUYS_FROM" else "client",
             "volume": float(vol) if vol is not None else None,
             "count": row.get("count"),
             "status": status,
@@ -336,9 +338,9 @@ class Neo4jReadClient:
             UNWIND $ids AS nid
             MATCH (e:Entity {id: nid})
             WHERE e.status <> 'MERGED'
-            OPTIONAL MATCH ()-[vin]->(e)
-            OPTIONAL MATCH (e)-[vout]->()
-            WITH e, count(DISTINCT vin) AS vendor_count, count(DISTINCT vout) AS client_count
+            OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+            OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+            WITH e, count(DISTINCT bf) AS vendor_count, count(DISTINCT st) AS client_count
             RETURN e, vendor_count, client_count
         """
         records = self._run(cypher, {"ids": node_ids})
@@ -354,7 +356,7 @@ class Neo4jReadClient:
         cypher = """
             MATCH (a:Entity)-[r]->(b:Entity)
             WHERE a.id IN $ids AND b.id IN $ids
-            RETURN DISTINCT a.id AS source, b.id AS target,
+            RETURN DISTINCT a.id AS source, b.id AS target, type(r) AS rel_type,
                    r.volume AS volume, r.count AS count,
                    coalesce(r.status, 'active') AS status
         """
@@ -628,10 +630,10 @@ class Neo4jReadClient:
                 params["industry"] = industry
 
             cypher += """
-                OPTIONAL MATCH ()-[vin]->(e)
-                OPTIONAL MATCH (e)-[vout]->()
-                WITH e, score, count(DISTINCT vin) AS vendor_count,
-                     count(DISTINCT vout) AS client_count
+                OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+                OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+                WITH e, score, count(DISTINCT bf) AS vendor_count,
+                     count(DISTINCT st) AS client_count
             """
             if sort_by == "volume":
                 cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC"
@@ -649,10 +651,10 @@ class Neo4jReadClient:
                 params["industry"] = industry
 
             cypher += """
-                OPTIONAL MATCH ()-[vin]->(e)
-                OPTIONAL MATCH (e)-[vout]->()
-                WITH e, count(DISTINCT vin) AS vendor_count,
-                     count(DISTINCT vout) AS client_count
+                OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+                OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+                WITH e, count(DISTINCT bf) AS vendor_count,
+                     count(DISTINCT st) AS client_count
             """
             if sort_by == "volume":
                 cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC"
@@ -702,10 +704,10 @@ class Neo4jReadClient:
         cypher = """
             MATCH (e:Entity {ein: $ein})
             WHERE e.status <> 'MERGED'
-            OPTIONAL MATCH ()-[vin]->(e)
-            OPTIONAL MATCH (e)-[vout]->()
-            RETURN e, count(DISTINCT vin) AS vendor_count,
-                   count(DISTINCT vout) AS client_count
+            OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+            OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+            RETURN e, count(DISTINCT bf) AS vendor_count,
+                   count(DISTINCT st) AS client_count
             LIMIT 1
         """
         record = self._run_single(cypher, {"ein": ein_clean})
@@ -726,10 +728,10 @@ class Neo4jReadClient:
             params["state"] = state
 
         cypher += """
-            OPTIONAL MATCH ()-[vin]->(e)
-            OPTIONAL MATCH (e)-[vout]->()
-            WITH e, score, count(DISTINCT vin) AS vendor_count,
-                 count(DISTINCT vout) AS client_count
+            OPTIONAL MATCH (e)-[bf:BUYS_FROM]->()
+            OPTIONAL MATCH (e)-[st:SELLS_TO]->()
+            WITH e, score, count(DISTINCT bf) AS vendor_count,
+                 count(DISTINCT st) AS client_count
             RETURN e, score, vendor_count, client_count
             ORDER BY score DESC
             LIMIT 5

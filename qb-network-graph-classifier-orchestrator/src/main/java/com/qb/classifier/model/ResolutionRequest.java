@@ -12,13 +12,21 @@ public record ResolutionRequest(
     @JsonProperty("record_type")         String recordType,
     @JsonProperty("company_id")          Long companyId,
     @JsonProperty("chain_depth")         int chainDepth,
-    @JsonProperty("classified_persona")  ClassifiedPersona classifiedPersona
+    @JsonProperty("classified_persona")  ClassifiedPersona classifiedPersona,
+    @JsonProperty("fast_mode")           boolean fastMode
 ) {
 
     /**
      * Build a resolution request from an entity connection and its classified persona.
      */
     public static ResolutionRequest from(EntityConnection conn, ClassifiedPersona persona) {
+        return from(conn, persona, false);
+    }
+
+    /**
+     * Build a resolution request with explicit fast_mode flag.
+     */
+    public static ResolutionRequest from(EntityConnection conn, ClassifiedPersona persona, boolean fastMode) {
         String eventId = "evt-" + conn.companyId() + "-" + conn.connectionId();
         String recordId = (conn.connectionType().equals("vendor") ? "v-" : "c-") + conn.connectionId();
 
@@ -28,7 +36,8 @@ public record ResolutionRequest(
             conn.connectionType(),
             conn.companyId(),
             0,
-            persona
+            persona,
+            fastMode
         );
     }
 }
