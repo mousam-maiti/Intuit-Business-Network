@@ -1,0 +1,68 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0008-create-bill-line-items
+      author: qb-network-graph
+      comment: >
+        Line items on bills. Description is commodity signal from buy-side.
+      changes:
+        - createTable:
+            tableName: bill_line_items
+            columns:
+              - column:
+                  name: line_item_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: bill_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: item_id
+                  type: BIGINT UNSIGNED
+                  remarks: "Links to products_services if applicable"
+              - column:
+                  name: description
+                  type: VARCHAR(500)
+                  constraints:
+                    nullable: false
+                  remarks: "Free-text — commodity signal from buy-side"
+              - column:
+                  name: quantity
+                  type: DECIMAL(10, 2)
+                  defaultValueNumeric: 1.00
+              - column:
+                  name: unit_price
+                  type: DECIMAL(12, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: amount
+                  type: DECIMAL(12, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: expense_category
+                  type: VARCHAR(255)
+                  remarks: "Materials, Subcontractor, Equipment, Office, etc."
+
+        - addForeignKeyConstraint:
+            baseTableName: bill_line_items
+            baseColumnNames: bill_id
+            referencedTableName: bills
+            referencedColumnNames: bill_id
+            constraintName: fk_bill_line_items_bill
+
+        - createIndex:
+            tableName: bill_line_items
+            indexName: idx_bill_line_items_bill
+            columns:
+              - column:
+                  name: bill_id
+
+      rollback:
+        - dropTable:
+            tableName: bill_line_items

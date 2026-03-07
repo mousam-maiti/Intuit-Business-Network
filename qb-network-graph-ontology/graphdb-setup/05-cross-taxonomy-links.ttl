@@ -1,0 +1,106 @@
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix naics:  <http://qb.intuit.com/naics/> .
+@prefix unspsc: <http://qb.intuit.com/unspsc/> .
+
+# ============================================================
+# CROSS-TAXONOMY LINKS — NAICS ↔ UNSPSC
+#
+# These are the links that make the agent smarter than flat
+# string matching. When NAICS sectors differ, query_ontology
+# checks if there's a shared commodity that connects them.
+#
+# skos:related is symmetric (owl:SymmetricProperty in SKOS spec),
+# so naics:X skos:related unspsc:Y implies the reverse via
+# RDFS-Plus reasoning.
+# ============================================================
+
+# --- KEY DEMO LINK: Plumbing contractor ↔ Plumbing wholesaler ---
+#
+# NAICS 238220 (Plumbing Contractor, sector 23)
+# NAICS 423720 (Plumbing Wholesaler, sector 42)
+# Connected via: UNSPSC 72151500 (Plumbing Services)
+#                UNSPSC 40141600 (Pipe Fittings)
+#
+# This is the canonical example from the design doc:
+# "Wholesaler supplies what contractor installs"
+
+naics:238220 skos:related unspsc:72151500 .   # contractor PROVIDES plumbing services
+naics:238220 skos:related unspsc:40141600 .   # contractor PROCURES pipe fittings
+naics:238220 skos:related unspsc:40141800 .   # contractor PROCURES plumbing supplies
+naics:238220 skos:related unspsc:40151500 .   # contractor installs water heaters
+
+naics:423720 skos:related unspsc:40141600 .   # wholesaler SELLS pipe fittings
+naics:423720 skos:related unspsc:40141700 .   # wholesaler SELLS valves
+naics:423720 skos:related unspsc:40141800 .   # wholesaler SELLS plumbing supplies
+naics:423720 skos:related unspsc:40151500 .   # wholesaler SELLS water heaters
+naics:423720 skos:related unspsc:72151500 .   # wholesaler serves plumbing services sector
+
+# --- Electrical contractor ↔ Electrical suppliers ---
+
+naics:238210 skos:related unspsc:72141000 .   # electrical contractor PROVIDES installation
+naics:238210 skos:related unspsc:39121000 .   # contractor PROCURES wire
+naics:238210 skos:related unspsc:39 .         # contractor PROCURES electrical equipment
+
+# --- Construction ↔ Building materials ---
+
+naics:236110 skos:related unspsc:72111000 .   # residential builder PROVIDES construction services
+naics:236110 skos:related unspsc:30111600 .   # builder PROCURES lumber
+naics:236110 skos:related unspsc:30121500 .   # builder PROCURES concrete
+
+naics:236220 skos:related unspsc:72112000 .   # commercial builder PROVIDES construction services
+naics:236220 skos:related unspsc:30111600 .   # builder PROCURES lumber
+naics:236220 skos:related unspsc:30121500 .   # builder PROCURES concrete
+
+# --- Lumber/materials wholesaler ↔ Construction ---
+
+naics:423310 skos:related unspsc:30111600 .   # lumber wholesaler SELLS lumber
+naics:423310 skos:related unspsc:30 .         # wholesaler serves building materials
+
+naics:423320 skos:related unspsc:30121500 .   # masonry wholesaler SELLS concrete/stone
+naics:423320 skos:related unspsc:30 .         # wholesaler serves building materials
+
+# --- Home center retail ↔ Various trades ---
+
+naics:444110 skos:related unspsc:40141600 .   # home center SELLS pipe fittings
+naics:444110 skos:related unspsc:39121000 .   # home center SELLS electrical wire
+naics:444110 skos:related unspsc:30111600 .   # home center SELLS lumber
+naics:444110 skos:related unspsc:40141800 .   # home center SELLS plumbing supplies
+
+# --- Painting contractor ↔ Paint retail ---
+
+naics:238320 skos:related unspsc:72121000 .   # painting contractor PROVIDES painting services
+naics:444120 skos:related unspsc:72121000 .   # paint store serves painting services sector
+
+# --- Food service ↔ Food products ---
+
+naics:722511 skos:related unspsc:90101500 .   # restaurant PROVIDES restaurant services
+naics:722511 skos:related unspsc:50 .         # restaurant PROCURES food products
+naics:722513 skos:related unspsc:90101500 .   # limited-service restaurant PROVIDES services
+naics:722513 skos:related unspsc:50 .         # restaurant PROCURES food products
+
+# --- Auto repair ↔ Auto parts (no link to plumbing!) ---
+# This is the NEGATIVE test case: auto repair should NOT
+# relate to plumbing via cross-taxonomy.
+
+naics:811111 skos:related unspsc:90 .         # auto repair — only links to its own domain
+
+# ============================================================
+# INTRA-TAXONOMY RELATEDNESS — NAICS ↔ NAICS
+#
+# Some NAICS codes in different sectors are closely related
+# but have no direct hierarchical link. skos:related captures
+# "these industries commonly interact" relationships.
+# ============================================================
+
+# Plumbing contractors often work with electrical contractors
+naics:238220 skos:related naics:238210 .
+
+# Residential builders subcontract to specialty trades
+naics:236110 skos:related naics:238220 .
+naics:236110 skos:related naics:238210 .
+naics:236110 skos:related naics:238320 .
+naics:236110 skos:related naics:238330 .
+
+# Construction material wholesalers serve construction
+naics:423310 skos:related naics:236110 .
+naics:423320 skos:related naics:236110 .

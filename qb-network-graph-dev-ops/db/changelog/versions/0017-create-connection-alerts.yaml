@@ -1,0 +1,78 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0017-create-connection-alerts
+      author: qb-network-graph
+      comment: >
+        Alert notifications for the Add Connection -> Entity Agent pipeline.
+        Tracks lifecycle stages: connection_added, entity_created,
+        entity_merged, merge_review. UI polls GET /alerts every 5s.
+      changes:
+        - createTable:
+            tableName: connection_alerts
+            columns:
+              - column:
+                  name: alert_id
+                  type: VARCHAR(32)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                  remarks: "a-{hex8}"
+              - column:
+                  name: connection_id
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: VARCHAR(64)
+                  defaultValue: "1"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: alert_type
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+                  remarks: "connection_added | entity_created | entity_merged | merge_review"
+              - column:
+                  name: title
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: message
+                  type: TEXT
+              - column:
+                  name: entity_name
+                  type: VARCHAR(255)
+              - column:
+                  name: target_entity_id
+                  type: VARCHAR(64)
+              - column:
+                  name: confidence
+                  type: FLOAT
+              - column:
+                  name: dismissed
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+
+        - createIndex:
+            tableName: connection_alerts
+            indexName: idx_alerts_user
+            columns:
+              - column:
+                  name: user_id
+              - column:
+                  name: dismissed
+              - column:
+                  name: created_at
+
+      rollback:
+        - dropTable:
+            tableName: connection_alerts

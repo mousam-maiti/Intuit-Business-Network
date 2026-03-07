@@ -1,0 +1,40 @@
+# QB Network Graph — Entity Resolution Agent v3
+# pip install -r requirements.txt
+
+# ── Core ────────────────────────────────────────────────────
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# ── Scoring ─────────────────────────────────────────────────
+rapidfuzz>=3.5.0
+numpy>=1.24.0
+
+# ── HTTP Client ─────────────────────────────────────────────
+httpx>=0.25.0
+
+# ── MySQL (golden record source of truth) ───────────────────
+mysql-connector-python>=8.3.0
+
+# ── Milvus (multi-vector search) ───────────────────────────
+pymilvus>=2.4.0
+
+# ── Embeddings (Gemini primary) ─────────────────────────────
+google-generativeai>=0.7.0
+# sentence-transformers>=2.2.0    # Optional: local CPU fallback
+
+# ── LLM (Gemini — same google-generativeai package as embeddings)
+# No additional dependency needed — google-generativeai covers both
+
+# ── Testing ─────────────────────────────────────────────────
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# ── Observability (OTEL — optional) ────────────────────────
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp-proto-grpc>=1.20.0
+opentelemetry-instrumentation-fastapi>=0.41b0
+opentelemetry-instrumentation-httpx>=0.41b0

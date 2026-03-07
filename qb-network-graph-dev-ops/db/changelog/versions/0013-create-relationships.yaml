@@ -1,0 +1,96 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0013-create-relationships
+      author: qb-network-graph
+      comment: >
+        Edges between golden records. Undirected — source PAYS target.
+        The vendor/client label is derived at the view layer from money flow direction.
+        Written by the Entity Resolution Agent when new edges are discovered.
+        CDC → Flink sync → Redis adjacency sets, KG Store qb:transactsWith triples.
+      changes:
+        - createTable:
+            tableName: relationships
+            columns:
+              - column:
+                  name: edge_id
+                  type: VARCHAR(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: source_entity_id
+                  type: VARCHAR(36)
+                  constraints:
+                    nullable: false
+                  remarks: "The payer (golden_record_id)"
+              - column:
+                  name: target_entity_id
+                  type: VARCHAR(36)
+                  constraints:
+                    nullable: false
+                  remarks: "The payee (golden_record_id)"
+              - column:
+                  name: transaction_volume
+                  type: DECIMAL(14, 2)
+                  remarks: "Edge weight — total transaction value"
+              - column:
+                  name: transaction_count
+                  type: INT
+              - column:
+                  name: commodity_flow
+                  type: JSON
+                  remarks: "UNSPSC/keyword list for this edge"
+              - column:
+                  name: first_transaction
+                  type: DATE
+              - column:
+                  name: last_transaction
+                  type: DATE
+              - column:
+                  name: status
+                  type: VARCHAR(10)
+                  defaultValue: "ACTIVE"
+                  remarks: "ACTIVE, DORMANT"
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+
+        - addForeignKeyConstraint:
+            baseTableName: relationships
+            baseColumnNames: source_entity_id
+            referencedTableName: golden_records
+            referencedColumnNames: golden_record_id
+            constraintName: fk_rel_source_entity
+
+        - addForeignKeyConstraint:
+            baseTableName: relationships
+            baseColumnNames: target_entity_id
+            referencedTableName: golden_records
+            referencedColumnNames: golden_record_id
+            constraintName: fk_rel_target_entity
+
+        - createIndex:
+            tableName: relationships
+            indexName: idx_rel_source
+            columns:
+              - column:
+                  name: source_entity_id
+        - createIndex:
+            tableName: relationships
+            indexName: idx_rel_target
+            columns:
+              - column:
+                  name: target_entity_id
+        - addUniqueConstraint:
+            tableName: relationships
+            columnNames: source_entity_id, target_entity_id
+            constraintName: uq_rel_edge
+
+      rollback:
+        - dropTable:
+            tableName: relationships

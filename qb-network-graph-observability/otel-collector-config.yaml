@@ -1,0 +1,117 @@
+# ============================================================
+# OTEL Collector — Full observability for QB Network Graph
+# ============================================================
+# Sources:
+#   - Flink (:9249) Prometheus scrape
+#   - Python services + Java classifier via OTLP gRPC (:4317)
+#
+# Pipelines:
+#   metrics:  Flink + OTLP → Prometheus :8889
+#   traces:   OTLP → Elasticsearch → Kibana
+#   logs:     OTLP → Elasticsearch → Kibana
+# ============================================================
+
+receivers:
+  # Scrape Flink's Prometheus endpoint
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'flink'
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['host.docker.internal:9249']
+              labels:
+                service: qb-flink-cdc
+                environment: local-dev
+
+  # OTLP from Python services + Java classifier
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+
+  # Only for Flink metrics pipeline (hardcoded service name)
+  resource/flink:
+    attributes:
+      - key: service.name
+        value: qb-flink-cdc
+        action: upsert
+      - key: deployment.environment
+        value: local-dev
+        action: upsert
+
+  # For OTLP pipelines — add environment, preserve service.name from SDK
+  resource/otlp:
+    attributes:
+      - key: deployment.environment
+        value: local-dev
+        action: upsert
+
+exporters:
+  # Traces → Elasticsearch → Kibana
+  elasticsearch/traces:
+    endpoints:
+      - http://qb-elasticsearch:9200
+    traces_index: qb-traces
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+    retry:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+
+  # Logs → Elasticsearch → Kibana
+  elasticsearch/logs:
+    endpoints:
+      - http://qb-elasticsearch:9200
+    logs_index: qb-logs
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+    retry:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+
+  # Metrics → Prometheus endpoint
+  # View at: http://localhost:8889/metrics
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/otlp, batch]
+      exporters: [elasticsearch/traces, debug]
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [batch]
+      exporters: [prometheus, debug]
+    logs:
+      receivers: [otlp]
+      processors: [resource/otlp, batch]
+      exporters: [elasticsearch/logs]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

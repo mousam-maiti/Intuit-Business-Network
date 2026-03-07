@@ -1,0 +1,101 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0015-create-pending-resolution
+      author: qb-network-graph
+      comment: >
+        Human review queue for ambiguous matches (confidence 0.4-0.7).
+        Agent creates PROVISIONAL golden record + pending resolution entry.
+        User approves/rejects via Review page → writes to match_decisions →
+        CDC feedback loop → agent processes decision.
+      changes:
+        - createTable:
+            tableName: pending_resolution
+            columns:
+              - column:
+                  name: match_id
+                  type: VARCHAR(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                  remarks: "PR-{hex8}"
+              - column:
+                  name: orphan_golden_id
+                  type: VARCHAR(36)
+                  constraints:
+                    nullable: false
+                  remarks: "PROVISIONAL golden record for the unmatched entity"
+              - column:
+                  name: candidate_golden_id
+                  type: VARCHAR(36)
+                  constraints:
+                    nullable: false
+                  remarks: "Existing golden record that MIGHT be the same entity"
+              - column:
+                  name: confidence
+                  type: DECIMAL(4, 3)
+                  remarks: "Agent confidence — in the ambiguous range"
+              - column:
+                  name: dimension_scores
+                  type: JSON
+              - column:
+                  name: reasoning
+                  type: TEXT
+              - column:
+                  name: key_uncertainty
+                  type: TEXT
+                  remarks: "What the agent is unsure about"
+              - column:
+                  name: status
+                  type: VARCHAR(15)
+                  defaultValue: "PENDING"
+                  constraints:
+                    nullable: false
+                  remarks: "PENDING, APPROVED, REJECTED"
+              - column:
+                  name: reviewer
+                  type: VARCHAR(255)
+                  remarks: "QB user who reviewed"
+              - column:
+                  name: reviewed_at
+                  type: TIMESTAMP(3)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+
+        - addForeignKeyConstraint:
+            baseTableName: pending_resolution
+            baseColumnNames: orphan_golden_id
+            referencedTableName: golden_records
+            referencedColumnNames: golden_record_id
+            constraintName: fk_pending_orphan
+
+        - addForeignKeyConstraint:
+            baseTableName: pending_resolution
+            baseColumnNames: candidate_golden_id
+            referencedTableName: golden_records
+            referencedColumnNames: golden_record_id
+            constraintName: fk_pending_candidate
+
+        - createIndex:
+            tableName: pending_resolution
+            indexName: idx_pending_status
+            columns:
+              - column:
+                  name: status
+        - createIndex:
+            tableName: pending_resolution
+            indexName: idx_pending_orphan
+            columns:
+              - column:
+                  name: orphan_golden_id
+        - createIndex:
+            tableName: pending_resolution
+            indexName: idx_pending_candidate
+            columns:
+              - column:
+                  name: candidate_golden_id
+
+      rollback:
+        - dropTable:
+            tableName: pending_resolution

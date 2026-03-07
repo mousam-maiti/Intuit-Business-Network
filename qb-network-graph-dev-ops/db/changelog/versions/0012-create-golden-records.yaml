@@ -1,0 +1,227 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0012-create-golden-records
+      author: qb-network-graph
+      comment: >
+        Resolved business entities — the output of the Entity Resolution Agent.
+        Each row is a unique real-world business identity, deduplicated from
+        multiple vendor/customer records across QB accounts.
+        
+        Written by: Entity Resolution Agent (transactional merges)
+        Read by: UI (ego-network, search), Agentic queries, Vector store sync
+        CDC: binlog → Flink sync → Vector Store, KG Store, Redis bucket_index
+        
+        Key insight: Paimon holds the pipeline data (bronze/silver).
+        MySQL holds the OUTCOME — golden records need ACID transactions
+        because a merge touches survivor + absorbed + audit atomically.
+      changes:
+        - createTable:
+            tableName: golden_records
+            columns:
+              # ── Primary Key ──
+              - column:
+                  name: golden_record_id
+                  type: VARCHAR(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+                  remarks: "UUID — G-{hex8}"
+              # ── Canonical Identity ──
+              - column:
+                  name: canonical_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+                  remarks: "Best-known name for this entity"
+              - column:
+                  name: name_variants
+                  type: JSON
+                  remarks: '["Bobs Plumbing", "Bob''s Plumbing LLC", "BP Supply"]'
+              # ── Identity Dimensions ──
+              - column:
+                  name: ein
+                  type: VARCHAR(9)
+                  remarks: "Cleaned 9-digit EIN (no dashes)"
+              - column:
+                  name: phone_digits
+                  type: VARCHAR(10)
+                  remarks: "Cleaned 10-digit phone"
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+              - column:
+                  name: contact_name
+                  type: VARCHAR(255)
+              # ── Industry ──
+              - column:
+                  name: naics_code
+                  type: VARCHAR(6)
+                  remarks: "6-digit NAICS (highest specificity from any source)"
+              - column:
+                  name: naics_sector
+                  type: VARCHAR(2)
+                  remarks: "2-digit sector"
+              - column:
+                  name: naics_subsector
+                  type: VARCHAR(3)
+                  remarks: "3-digit subsector"
+              # ── Location ──
+              - column:
+                  name: state
+                  type: CHAR(2)
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+                  remarks: "UPPERCASE normalized"
+              - column:
+                  name: zip5
+                  type: VARCHAR(5)
+              - column:
+                  name: zip3
+                  type: VARCHAR(3)
+              - column:
+                  name: street_address
+                  type: VARCHAR(255)
+              # ── Commodity ──
+              - column:
+                  name: commodity_keywords
+                  type: JSON
+                  remarks: '["pvc pipe", "copper fitting", "water heater"]'
+              - column:
+                  name: service_categories
+                  type: JSON
+                  remarks: '["Materials", "Installation"]'
+              # ── Behavioral (aggregated across all sources) ──
+              - column:
+                  name: total_volume
+                  type: DECIMAL(14, 2)
+                  remarks: "Sum of transaction volume across all QB accounts referencing this entity"
+              - column:
+                  name: avg_transaction
+                  type: DECIMAL(12, 2)
+              - column:
+                  name: transaction_count
+                  type: INT
+              - column:
+                  name: volume_bracket
+                  type: VARCHAR(10)
+                  remarks: "VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH"
+              # ── Resolution Metadata ──
+              - column:
+                  name: source_count
+                  type: INT
+                  defaultValueNumeric: 1
+                  remarks: "How many QB accounts reference this entity"
+              - column:
+                  name: source_records
+                  type: JSON
+                  remarks: '["1:v-42", "3:v-18", "7:c-5"] — company_id:record_id'
+              - column:
+                  name: confidence
+                  type: DECIMAL(4, 3)
+                  remarks: "Agent confidence 0.000-0.999 — higher = more sources agree"
+              - column:
+                  name: status
+                  type: VARCHAR(15)
+                  defaultValue: "ACTIVE"
+                  constraints:
+                    nullable: false
+                  remarks: "ACTIVE, PROVISIONAL, MERGED"
+              - column:
+                  name: merged_into
+                  type: VARCHAR(36)
+                  remarks: "Redirect pointer if status=MERGED"
+              - column:
+                  name: entity_type
+                  type: VARCHAR(15)
+                  defaultValue: "PHANTOM"
+                  remarks: "QB_USER (has QB account) or PHANTOM (inferred from vendor/customer records)"
+              # ── Classified Persona (full JSON for agent reads) ──
+              - column:
+                  name: persona
+                  type: JSON
+                  remarks: "Full ClassifiedPersona JSON — 5 dimensions + sparsity scores"
+              # ── Bucket Keys (precomputed for fast candidate lookup) ──
+              - column:
+                  name: bucket_keys
+                  type: JSON
+                  remarks: '["name:BOBS+TX", "ein:743218976", "naics4:4237+TX", "zip3:787"]'
+              # ── Timestamps ──
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+
+        # ── Indexes for agent find_candidates + UI queries ──
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_status
+            columns:
+              - column:
+                  name: status
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_merged_into
+            columns:
+              - column:
+                  name: merged_into
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_ein
+            unique: true
+            columns:
+              - column:
+                  name: ein
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_state
+            columns:
+              - column:
+                  name: state
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_naics_state
+            columns:
+              - column:
+                  name: naics_code
+              - column:
+                  name: state
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_zip3
+            columns:
+              - column:
+                  name: zip3
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_city_state
+            columns:
+              - column:
+                  name: city
+              - column:
+                  name: state
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_entity_type
+            columns:
+              - column:
+                  name: entity_type
+        - createIndex:
+            tableName: golden_records
+            indexName: idx_gr_canonical_name
+            columns:
+              - column:
+                  name: canonical_name
+        # Full-text for search
+        - sql:
+            comment: "Full-text index on canonical_name for search"
+            sql: >
+              ALTER TABLE golden_records ADD FULLTEXT INDEX ft_gr_name (canonical_name);
+
+      rollback:
+        - dropTable:
+            tableName: golden_records

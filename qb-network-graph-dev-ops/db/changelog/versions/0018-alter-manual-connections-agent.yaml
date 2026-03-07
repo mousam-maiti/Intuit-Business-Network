@@ -1,0 +1,40 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0018-alter-manual-connections-agent
+      author: qb-network-graph
+      comment: >
+        Add entity agent resolution tracking columns to manual_connections.
+        Populated by the background task after POST /connections invokes
+        the entity agent at :18181/resolve.
+      changes:
+        - addColumn:
+            tableName: manual_connections
+            columns:
+              - column:
+                  name: agent_status
+                  type: VARCHAR(15)
+                  remarks: "pending | resolved | failed"
+              - column:
+                  name: agent_decision
+                  type: VARCHAR(32)
+                  remarks: "MERGE | NEW_ENTITY | REVIEW"
+              - column:
+                  name: agent_golden_record_id
+                  type: VARCHAR(64)
+              - column:
+                  name: agent_resolved_at
+                  type: TIMESTAMP(3)
+
+      rollback:
+        - dropColumn:
+            tableName: manual_connections
+            columnName: agent_status
+        - dropColumn:
+            tableName: manual_connections
+            columnName: agent_decision
+        - dropColumn:
+            tableName: manual_connections
+            columnName: agent_golden_record_id
+        - dropColumn:
+            tableName: manual_connections
+            columnName: agent_resolved_at

@@ -1,0 +1,124 @@
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix qb:     <http://qb.intuit.com/ontology/> .
+@prefix geo:    <http://qb.intuit.com/geo/> .
+
+# ============================================================
+# GEO HIERARCHY — Demo Subset
+#
+# Structure: State → MetroArea → City
+#
+# Uses qb:withinState and qb:withinMetro per data model §4.7.
+# Texas is primary for demo scenarios (Bob's Plumbing = Austin).
+# ============================================================
+
+# --- Texas ---
+
+geo:texas a qb:State ;
+    rdfs:label "Texas" .
+
+geo:austin-metro a qb:MetroArea ;
+    rdfs:label "Austin-Round Rock-Georgetown" ;
+    qb:withinState geo:texas .
+
+geo:austin a qb:City ;
+    rdfs:label "Austin" ;
+    qb:withinMetro geo:austin-metro ;
+    qb:withinState geo:texas .
+
+geo:round-rock a qb:City ;
+    rdfs:label "Round Rock" ;
+    qb:withinMetro geo:austin-metro ;
+    qb:withinState geo:texas .
+
+geo:georgetown a qb:City ;
+    rdfs:label "Georgetown" ;
+    qb:withinMetro geo:austin-metro ;
+    qb:withinState geo:texas .
+
+geo:cedar-park a qb:City ;
+    rdfs:label "Cedar Park" ;
+    qb:withinMetro geo:austin-metro ;
+    qb:withinState geo:texas .
+
+geo:dallas-metro a qb:MetroArea ;
+    rdfs:label "Dallas-Fort Worth-Arlington" ;
+    qb:withinState geo:texas .
+
+geo:dallas a qb:City ;
+    rdfs:label "Dallas" ;
+    qb:withinMetro geo:dallas-metro ;
+    qb:withinState geo:texas .
+
+geo:fort-worth a qb:City ;
+    rdfs:label "Fort Worth" ;
+    qb:withinMetro geo:dallas-metro ;
+    qb:withinState geo:texas .
+
+geo:houston-metro a qb:MetroArea ;
+    rdfs:label "Houston-The Woodlands-Sugar Land" ;
+    qb:withinState geo:texas .
+
+geo:houston a qb:City ;
+    rdfs:label "Houston" ;
+    qb:withinMetro geo:houston-metro ;
+    qb:withinState geo:texas .
+
+geo:san-antonio-metro a qb:MetroArea ;
+    rdfs:label "San Antonio-New Braunfels" ;
+    qb:withinState geo:texas .
+
+geo:san-antonio a qb:City ;
+    rdfs:label "San Antonio" ;
+    qb:withinMetro geo:san-antonio-metro ;
+    qb:withinState geo:texas .
+
+# --- California ---
+
+geo:california a qb:State ;
+    rdfs:label "California" .
+
+geo:sf-metro a qb:MetroArea ;
+    rdfs:label "San Francisco-Oakland-Berkeley" ;
+    qb:withinState geo:california .
+
+geo:san-francisco a qb:City ;
+    rdfs:label "San Francisco" ;
+    qb:withinMetro geo:sf-metro ;
+    qb:withinState geo:california .
+
+geo:la-metro a qb:MetroArea ;
+    rdfs:label "Los Angeles-Long Beach-Anaheim" ;
+    qb:withinState geo:california .
+
+geo:los-angeles a qb:City ;
+    rdfs:label "Los Angeles" ;
+    qb:withinMetro geo:la-metro ;
+    qb:withinState geo:california .
+
+# --- New York ---
+
+geo:new-york-state a qb:State ;
+    rdfs:label "New York" .
+
+geo:nyc-metro a qb:MetroArea ;
+    rdfs:label "New York-Newark-Jersey City" ;
+    qb:withinState geo:new-york-state .
+
+geo:new-york-city a qb:City ;
+    rdfs:label "New York City" ;
+    qb:withinMetro geo:nyc-metro ;
+    qb:withinState geo:new-york-state .
+
+# --- Florida ---
+
+geo:florida a qb:State ;
+    rdfs:label "Florida" .
+
+geo:miami-metro a qb:MetroArea ;
+    rdfs:label "Miami-Fort Lauderdale-Pompano Beach" ;
+    qb:withinState geo:florida .
+
+geo:miami a qb:City ;
+    rdfs:label "Miami" ;
+    qb:withinMetro geo:miami-metro ;
+    qb:withinState geo:florida .

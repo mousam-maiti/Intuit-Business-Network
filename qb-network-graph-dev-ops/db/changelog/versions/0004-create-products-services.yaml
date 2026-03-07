@@ -1,0 +1,75 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0004-create-products-services
+      author: qb-network-graph
+      comment: >
+        What each QB user sells. Provides commodity classification signal.
+        CDC → Paimon bronze.staged_products_services.
+      changes:
+        - createTable:
+            tableName: products_services
+            columns:
+              - column:
+                  name: item_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+                  remarks: "'Water heater installation'"
+              - column:
+                  name: description
+                  type: TEXT
+                  remarks: "Free-text — commodity signal for persona"
+              - column:
+                  name: type
+                  type: VARCHAR(20)
+                  defaultValue: "service"
+                  remarks: "service, product, bundle"
+              - column:
+                  name: unit_price
+                  type: DECIMAL(12, 2)
+              - column:
+                  name: category
+                  type: VARCHAR(255)
+                  remarks: "QB user-assigned category"
+              - column:
+                  name: is_active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: products_services
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_products_services_company
+
+        - createIndex:
+            tableName: products_services
+            indexName: idx_products_services_company
+            columns:
+              - column:
+                  name: company_id
+
+      rollback:
+        - dropTable:
+            tableName: products_services

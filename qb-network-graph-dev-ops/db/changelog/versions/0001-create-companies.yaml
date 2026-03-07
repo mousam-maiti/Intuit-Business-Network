@@ -1,0 +1,93 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-create-companies
+      author: qb-network-graph
+      comment: >
+        QB user accounts — the business's own profile.
+        Each company_id is a QB account. This is the ONLY entity that
+        is inherently deduplicated (QB enforces unique accounts).
+        CDC → Paimon bronze.staged_companies.
+      changes:
+        - createTable:
+            tableName: companies
+            columns:
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: ein
+                  type: VARCHAR(20)
+                  remarks: "Employer Identification Number — strong identity signal"
+              - column:
+                  name: industry_category
+                  type: VARCHAR(255)
+                  remarks: "Free-text noisy input. Pipeline classifies to NAICS"
+              - column:
+                  name: street_address
+                  type: VARCHAR(255)
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: state
+                  type: VARCHAR(2)
+              - column:
+                  name: zip
+                  type: VARCHAR(10)
+              - column:
+                  name: primary_contact
+                  type: VARCHAR(255)
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+              - column:
+                  name: phone
+                  type: VARCHAR(20)
+              - column:
+                  name: website
+                  type: VARCHAR(255)
+              - column:
+                  name: status
+                  type: VARCHAR(20)
+                  defaultValue: "active"
+                  remarks: "active, inactive, suspended"
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_state
+            columns:
+              - column:
+                  name: state
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_industry
+            columns:
+              - column:
+                  name: industry_category
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_ein
+            columns:
+              - column:
+                  name: ein
+
+      rollback:
+        - dropTable:
+            tableName: companies

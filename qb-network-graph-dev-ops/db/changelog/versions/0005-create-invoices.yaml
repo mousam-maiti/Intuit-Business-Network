@@ -1,0 +1,94 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0005-create-invoices
+      author: qb-network-graph
+      comment: >
+        Company invoices a customer (company is payee, customer is payer).
+        CDC → Paimon bronze.staged_invoices.
+        Drives edge weights (transaction volume) and behavioral persona.
+      changes:
+        - createTable:
+            tableName: invoices
+            columns:
+              - column:
+                  name: invoice_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: customer_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+              - column:
+                  name: invoice_number
+                  type: VARCHAR(50)
+              - column:
+                  name: invoice_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: due_date
+                  type: DATE
+              - column:
+                  name: total_amount
+                  type: DECIMAL(14, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(20)
+                  defaultValue: "pending"
+                  remarks: "pending, paid, overdue, void"
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: invoices
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_invoices_company
+        - addForeignKeyConstraint:
+            baseTableName: invoices
+            baseColumnNames: customer_id
+            referencedTableName: customers
+            referencedColumnNames: customer_id
+            constraintName: fk_invoices_customer
+
+        - createIndex:
+            tableName: invoices
+            indexName: idx_invoices_company
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: invoices
+            indexName: idx_invoices_customer
+            columns:
+              - column:
+                  name: customer_id
+        - createIndex:
+            tableName: invoices
+            indexName: idx_invoices_date
+            columns:
+              - column:
+                  name: invoice_date
+
+      rollback:
+        - dropTable:
+            tableName: invoices

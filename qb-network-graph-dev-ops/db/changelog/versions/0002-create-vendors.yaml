@@ -1,0 +1,125 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0002-create-vendors
+      author: qb-network-graph
+      comment: >
+        Businesses a QB user buys from. This is where phantom entities originate.
+        A vendor record is just free-text typed by the QB user — the SAME real-world
+        business appears as different vendor records across QB accounts.
+        CDC → Paimon bronze.staged_vendors → Flink classification → resolution.
+        Fields align to ConnectionsPage add-connection form.
+      changes:
+        - createTable:
+            tableName: vendors
+            columns:
+              - column:
+                  name: vendor_id
+                  type: BIGINT UNSIGNED
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT UNSIGNED
+                  constraints:
+                    nullable: false
+                  remarks: "The QB user who added this vendor"
+              - column:
+                  name: display_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+                  remarks: "Free-text: 'Bobs Plumbing', 'Bob's Plumbing LLC', etc."
+              - column:
+                  name: ein
+                  type: VARCHAR(20)
+                  remarks: "Tax ID if 1099 filed. Often NULL — triggers Tier 1 instant match when present"
+              - column:
+                  name: contact_name
+                  type: VARCHAR(255)
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+              - column:
+                  name: phone
+                  type: VARCHAR(20)
+              - column:
+                  name: category
+                  type: VARCHAR(255)
+                  remarks: "Free-text → pipeline classifies to NAICS code"
+              - column:
+                  name: commodity
+                  type: VARCHAR(500)
+                  remarks: "Free-text commodity description → used for persona vector"
+              - column:
+                  name: street_address
+                  type: VARCHAR(255)
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: state
+                  type: VARCHAR(2)
+              - column:
+                  name: zip
+                  type: VARCHAR(10)
+              - column:
+                  name: website
+                  type: VARCHAR(255)
+              - column:
+                  name: expected_volume
+                  type: DECIMAL(14, 2)
+                  remarks: "Expected annual transaction volume"
+              - column:
+                  name: payment_terms
+                  type: VARCHAR(20)
+                  remarks: "due_on_receipt, net_15, net_30, net_60"
+              - column:
+                  name: is_active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+        - addForeignKeyConstraint:
+            baseTableName: vendors
+            baseColumnNames: company_id
+            referencedTableName: companies
+            referencedColumnNames: company_id
+            constraintName: fk_vendors_company
+
+        - createIndex:
+            tableName: vendors
+            indexName: idx_vendors_company
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: vendors
+            indexName: idx_vendors_display_name
+            columns:
+              - column:
+                  name: display_name
+        - createIndex:
+            tableName: vendors
+            indexName: idx_vendors_ein
+            columns:
+              - column:
+                  name: ein
+        - createIndex:
+            tableName: vendors
+            indexName: idx_vendors_state
+            columns:
+              - column:
+                  name: state
+
+      rollback:
+        - dropTable:
+            tableName: vendors

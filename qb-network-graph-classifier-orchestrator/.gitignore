@@ -1,0 +1,11 @@
+target/
+*.class
+*.jar
+*.log
+.idea/
+*.iml
+.checkpoints/
+classified-output/
+dead-letter/
+logs/
+.classifier.pid

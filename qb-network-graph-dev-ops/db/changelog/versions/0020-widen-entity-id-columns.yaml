@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0020-widen-entity-id-columns
+      author: qb-network-graph
+      comment: >
+        Widen golden_record_id and relationship entity ID columns from VARCHAR(36) to VARCHAR(40)
+        to accommodate G-{uuid5} format (38 chars) used by the seed generator.
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: varchar(36)
+            sql: >
+              SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+              WHERE TABLE_SCHEMA = 'quickbooks'
+                AND TABLE_NAME = 'golden_records'
+                AND COLUMN_NAME = 'golden_record_id'
+      changes:
+        - modifyDataType:
+            tableName: golden_records
+            columnName: golden_record_id
+            newDataType: VARCHAR(40)
+        - modifyDataType:
+            tableName: golden_records
+            columnName: merged_into
+            newDataType: VARCHAR(40)
+        - modifyDataType:
+            tableName: relationships
+            columnName: source_entity_id
+            newDataType: VARCHAR(40)
+        - modifyDataType:
+            tableName: relationships
+            columnName: target_entity_id
+            newDataType: VARCHAR(40)
+
+      rollback:
+        - modifyDataType:
+            tableName: golden_records
+            columnName: golden_record_id
+            newDataType: VARCHAR(36)
+        - modifyDataType:
+            tableName: golden_records
+            columnName: merged_into
+            newDataType: VARCHAR(36)
+        - modifyDataType:
+            tableName: relationships
+            columnName: source_entity_id
+            newDataType: VARCHAR(36)
+        - modifyDataType:
+            tableName: relationships
+            columnName: target_entity_id
+            newDataType: VARCHAR(36)

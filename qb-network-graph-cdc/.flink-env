@@ -1,0 +1,2 @@
+export FLINK_HOME="/Users/mousammaiti/flink/flink-1.18.1"
+export PAIMON_WAREHOUSE_PATH="/Users/mousammaiti/IntuitQB-StreamHouse"

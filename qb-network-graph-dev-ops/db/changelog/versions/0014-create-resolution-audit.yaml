@@ -1,0 +1,127 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0014-create-resolution-audit
+      author: qb-network-graph
+      comment: >
+        Every resolution decision made by the Entity Resolution Agent.
+        Append-only — never updated. Provides full decision trail for
+        debugging, compliance, and before/after golden record snapshots.
+      changes:
+        - createTable:
+            tableName: resolution_audit
+            columns:
+              - column:
+                  name: audit_id
+                  type: VARCHAR(36)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: VARCHAR(36)
+                  remarks: "From classifier-orchestrator (evt-{company}-{connection})"
+              - column:
+                  name: record_id
+                  type: VARCHAR(100)
+                  remarks: "Source record reference (v-42, c-18)"
+              # ── Decision ──
+              - column:
+                  name: perspective
+                  type: VARCHAR(10)
+                  defaultValue: "GLOBAL"
+                  remarks: "GLOBAL or NATIVE"
+              - column:
+                  name: decision
+                  type: VARCHAR(20)
+                  constraints:
+                    nullable: false
+                  remarks: "MERGE, NEW_ENTITY, REVIEW, NO_MERGE_FOUND"
+              - column:
+                  name: trigger_type
+                  type: VARCHAR(30)
+                  remarks: "LAYER_1_EIN, AI_AGENT_EMBEDDING, AI_AGENT_LLM, RE_EVALUATION"
+              - column:
+                  name: target_golden_id
+                  type: VARCHAR(36)
+                  remarks: "Golden record merged into (NULL for NEW_ENTITY)"
+              - column:
+                  name: absorbed_golden_id
+                  type: VARCHAR(36)
+                  remarks: "Only for golden-to-golden merge"
+              # ── Scores ──
+              - column:
+                  name: confidence
+                  type: DECIMAL(4, 3)
+              - column:
+                  name: dimension_scores
+                  type: JSON
+                  remarks: "{identity: 0.9, industry: 0.7, location: 0.95, ...}"
+              - column:
+                  name: reasoning
+                  type: TEXT
+                  remarks: "Human-readable explanation"
+              - column:
+                  name: key_factors
+                  type: JSON
+                  remarks: '["EIN exact match", "name 85% similar", "same city"]'
+              # ── Agent Metadata ──
+              - column:
+                  name: candidates_evaluated
+                  type: INT
+              - column:
+                  name: llm_calls
+                  type: INT
+                  remarks: "0 if resolved by embedding alone"
+              - column:
+                  name: embedding_calls
+                  type: INT
+              - column:
+                  name: total_duration_ms
+                  type: INT
+              - column:
+                  name: evaluation_chain
+                  type: JSON
+                  remarks: "Full tool call chain [{tool, input, output, duration}, ...]"
+              # ── Snapshots ──
+              - column:
+                  name: golden_record_before
+                  type: JSON
+                  remarks: "Golden record state before this decision"
+              - column:
+                  name: golden_record_after
+                  type: JSON
+                  remarks: "Golden record state after this decision"
+              # ── Timestamp ──
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(3)
+                  defaultValueComputed: CURRENT_TIMESTAMP(3)
+
+        - createIndex:
+            tableName: resolution_audit
+            indexName: idx_audit_event
+            columns:
+              - column:
+                  name: event_id
+        - createIndex:
+            tableName: resolution_audit
+            indexName: idx_audit_target
+            columns:
+              - column:
+                  name: target_golden_id
+        - createIndex:
+            tableName: resolution_audit
+            indexName: idx_audit_decision
+            columns:
+              - column:
+                  name: decision
+        - createIndex:
+            tableName: resolution_audit
+            indexName: idx_audit_created
+            columns:
+              - column:
+                  name: created_at
+
+      rollback:
+        - dropTable:
+            tableName: resolution_audit

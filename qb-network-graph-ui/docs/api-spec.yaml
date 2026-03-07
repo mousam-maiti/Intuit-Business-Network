@@ -1,0 +1,1600 @@
+openapi: 3.1.0
+info:
+  title: QB Network Graph API
+  version: 1.0.0
+  description: |
+    Backend API for the QB Network Graph UI. Provides entity resolution,
+    relationship traversal, native perspective overrides, and AI-assisted
+    network analysis for the QuickBooks business network.
+  contact:
+    name: QB Network Graph Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+
+# ─────────────────────────────────────────────────────────
+# Tags
+# ─────────────────────────────────────────────────────────
+tags:
+  - name: Entities
+    description: Golden-record entity CRUD
+  - name: Relationships
+    description: Edges between entities (vendor/client transactions)
+  - name: Search
+    description: Full-text + faceted entity search
+  - name: Matching
+    description: Entity resolution and pending match review
+  - name: Connections
+    description: CDC auto-detected and manually added connections
+  - name: Native
+    description: User-specific attribute overrides and entity merges
+
+# ─────────────────────────────────────────────────────────
+# Security
+# ─────────────────────────────────────────────────────────
+security:
+  - bearerAuth: []
+
+# ─────────────────────────────────────────────────────────
+# Component Schemas
+# ─────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token injected by client auth interceptor (not yet implemented)
+
+  schemas:
+    # ── Core Models ──────────────────────────────────────
+
+    Entity:
+      type: object
+      required: [id, name, industry, naics, city, state, confidence, vendors, clients, volume, variants, commodities]
+      properties:
+        id:
+          type: string
+          example: e1
+        name:
+          type: string
+          example: Acme Construction Co
+        ein:
+          type: string
+          nullable: true
+          example: "74-3201587"
+        contactName:
+          type: string
+          nullable: true
+          example: John Mitchell
+        email:
+          type: string
+          format: email
+          nullable: true
+          example: john@acmeconstruction.com
+        phone:
+          type: string
+          nullable: true
+          example: "(512) 555-0100"
+        website:
+          type: string
+          format: uri
+          nullable: true
+          example: https://acmeconstruction.com
+        industry:
+          type: string
+          description: NAICS code
+          example: "236220"
+        naics:
+          type: string
+          description: Same as industry (canonical NAICS code)
+          example: "236220"
+        legalStructure:
+          type: string
+          enum: [LLC, Corp, Inc, Sole Prop]
+          example: LLC
+        address:
+          type: string
+          nullable: true
+          example: 4500 Congress Ave
+        city:
+          type: string
+          example: Austin
+        state:
+          type: string
+          example: TX
+        zip:
+          type: string
+          nullable: true
+          example: "78701"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Entity resolution confidence score
+          example: 0.96
+        vendors:
+          type: integer
+          description: Count of vendor relationships
+          example: 23
+        clients:
+          type: integer
+          description: Count of client relationships
+          example: 45
+        volume:
+          type: number
+          description: Annual transaction volume in USD
+          example: 4200000
+        variants:
+          type: array
+          items:
+            type: string
+          description: Known name variants
+          example: ["Acme Const", "ACME Construction"]
+        commodities:
+          type: array
+          items:
+            type: string
+          description: Product/service categories
+          example: ["Building Materials", "Concrete", "Steel"]
+        serviceArea:
+          type: string
+          nullable: true
+          description: Geographic service region
+          example: Central Texas
+        x:
+          type: number
+          description: Graph layout x-coordinate
+          example: 400
+        y:
+          type: number
+          description: Graph layout y-coordinate
+          example: 300
+
+    Relationship:
+      type: object
+      required: [source, target, volume, count, status]
+      properties:
+        source:
+          type: string
+          description: Payer entity ID
+          example: e1
+        target:
+          type: string
+          description: Payee entity ID
+          example: e2
+        volume:
+          type: number
+          description: Annual transaction volume in USD
+          example: 450000
+        count:
+          type: integer
+          description: Number of transactions
+          example: 38
+        status:
+          type: string
+          enum: [active, dormant]
+          example: active
+
+    MonthlyVolume:
+      type: object
+      required: [month, vol]
+      properties:
+        month:
+          type: string
+          description: Abbreviated month name
+          example: Jan
+        vol:
+          type: number
+          description: Volume value (in thousands USD)
+          example: 480
+
+    MatchScores:
+      type: object
+      required: [name, industry, location, commodity]
+      properties:
+        name:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.78
+        industry:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.88
+        location:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.61
+        commodity:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.74
+
+    PendingMatch:
+      type: object
+      required: [id, inputName, inputCategory, inputLocation, candidate, confidence, age, scores, sharedNeighbors]
+      properties:
+        id:
+          type: string
+          example: m1
+        inputName:
+          type: string
+          description: Raw name from incoming document
+          example: R & J Electrical
+        inputCategory:
+          type: string
+          description: Category from incoming document
+          example: Electrical
+        inputLocation:
+          type: string
+          description: Location from incoming document
+          example: "Austin, TX"
+        candidate:
+          $ref: "#/components/schemas/Entity"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.78
+        age:
+          type: string
+          description: Human-readable age of the match
+          example: 2 hours ago
+        scores:
+          $ref: "#/components/schemas/MatchScores"
+        sharedNeighbors:
+          type: array
+          items:
+            type: string
+          description: Names of entities shared between input and candidate networks
+          example: ["Acme Construction Co", "BuildRight Inc", "Tool Depot"]
+
+    EntityResolutionResult:
+      oneOf:
+        - $ref: "#/components/schemas/ResolutionTier0"
+        - $ref: "#/components/schemas/ResolutionTier1"
+        - $ref: "#/components/schemas/ResolutionTier2"
+      discriminator:
+        propertyName: tier
+        mapping:
+          "0": "#/components/schemas/ResolutionTier0"
+          "1": "#/components/schemas/ResolutionTier1"
+          "2": "#/components/schemas/ResolutionTier2"
+
+    ResolutionTier0:
+      type: object
+      required: [tier, match]
+      properties:
+        tier:
+          type: integer
+          const: 0
+          description: No match found
+        match:
+          type: "null"
+
+    ResolutionTier1:
+      type: object
+      required: [tier, match, confidence, latency, scores]
+      properties:
+        tier:
+          type: integer
+          const: 1
+          description: Deterministic match (EIN or high-confidence name)
+        match:
+          $ref: "#/components/schemas/Entity"
+        confidence:
+          type: number
+          format: float
+          example: 0.91
+        latency:
+          type: string
+          description: Resolution latency
+          example: 47ms
+        scores:
+          $ref: "#/components/schemas/MatchScores"
+
+    ResolutionTier2:
+      type: object
+      required: [tier, candidates, latency]
+      properties:
+        tier:
+          type: integer
+          const: 2
+          description: AI-ranked candidates requiring manual review
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [entity, confidence, scores]
+            properties:
+              entity:
+                $ref: "#/components/schemas/Entity"
+              confidence:
+                type: number
+                format: float
+                example: 0.73
+              scores:
+                $ref: "#/components/schemas/MatchScores"
+        latency:
+          type: string
+          example: 340ms
+
+    AutoDetected:
+      type: object
+      required: [id, type, source, sourceDate, entity, resolution, tier, confidence, latency, time]
+      properties:
+        id:
+          type: string
+          example: a1
+        type:
+          type: string
+          enum: [vendor, client]
+          example: vendor
+        source:
+          type: string
+          description: Source document reference
+          example: "Bill #1047"
+        sourceDate:
+          type: string
+          description: Date from source document
+          example: Feb 14
+        entity:
+          $ref: "#/components/schemas/Entity"
+        resolution:
+          type: string
+          enum: [auto]
+          example: auto
+        tier:
+          type: integer
+          enum: [1]
+          description: Resolution tier (auto-detected are always tier 1)
+          example: 1
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.96
+        latency:
+          type: string
+          description: Resolution latency
+          example: 32ms
+        time:
+          type: string
+          description: Human-readable timestamp
+          example: 2 hours ago
+
+    ManualConnection:
+      type: object
+      required: [id, type, entity, addedVia, time]
+      properties:
+        id:
+          type: string
+          example: ma1
+        type:
+          type: string
+          enum: [vendor, client]
+          example: vendor
+        entity:
+          $ref: "#/components/schemas/Entity"
+        addedVia:
+          type: string
+          enum: [Matched to existing entity, Created as new entity]
+          example: Matched to existing entity
+        confidence:
+          type: number
+          format: float
+          nullable: true
+          description: "null when entity was created new (no match)"
+          example: 0.88
+        time:
+          type: string
+          description: Human-readable timestamp
+          example: 3 days ago
+
+    OverrideFields:
+      type: object
+      description: |
+        Any subset of editable entity fields plus native-only fields.
+        Editable: name, ein, contactName, email, phone, website, industry, naics,
+        legalStructure, address, city, state, zip, commodities, serviceArea, variants.
+        Native-only: nickname, notes, tags.
+      properties:
+        name:
+          type: string
+        ein:
+          type: string
+        contactName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        website:
+          type: string
+        industry:
+          type: string
+        naics:
+          type: string
+        legalStructure:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        zip:
+          type: string
+        commodities:
+          type: array
+          items:
+            type: string
+        serviceArea:
+          type: string
+        variants:
+          type: array
+          items:
+            type: string
+        nickname:
+          type: string
+          description: Native-only field
+          example: R&J guys
+        notes:
+          type: string
+          description: Native-only field
+          example: Reliable, always on time
+        tags:
+          type: array
+          items:
+            type: string
+          description: Native-only field
+          example: ["preferred"]
+
+    NativeMerge:
+      type: object
+      required: [id, sourceEntityId, targetEntityId, origin, reason, migratedRelationships, timestamp]
+      properties:
+        id:
+          type: string
+          example: nm1
+        sourceEntityId:
+          type: string
+          description: Entity being merged away (absorbed)
+          example: e9
+        targetEntityId:
+          type: string
+          description: Entity that survives the merge
+          example: e4
+        origin:
+          type: string
+          enum: [user, system]
+          description: Who initiated the merge
+          example: user
+        reason:
+          type: string
+          description: User-provided reason for the merge
+          example: SiteWork Pros is a DBA of R&J Electric
+        migratedRelationships:
+          type: array
+          items:
+            type: object
+            required: [source, target]
+            properties:
+              source:
+                type: string
+              target:
+                type: string
+          description: Relationships that were moved from source to target entity
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-02-15T10:30:00Z"
+
+    # ── AI Response Models ───────────────────────────────
+
+    AITable:
+      type: object
+      required: [headers, rows]
+      properties:
+        headers:
+          type: array
+          items:
+            type: string
+          example: ["Vendor", "Annual Spend", "Txns", "Status"]
+        rows:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+          example: [["Bob's Plumbing LLC", "$450,000", "38", "Active"]]
+
+    AIChart:
+      type: object
+      required: [type, title, data]
+      properties:
+        type:
+          type: string
+          enum: [bar, area, pie]
+          example: bar
+        title:
+          type: string
+          example: VENDOR SPEND COMPARISON
+        data:
+          type: array
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name:
+                type: string
+                example: "Bob's Plumb"
+              value:
+                type: number
+                example: 450000
+        config:
+          type: object
+          description: Optional chart styling overrides
+          properties:
+            stroke:
+              type: string
+              example: "#2CA01C"
+            fill:
+              type: string
+              example: "#E8F5E2"
+
+    AIScore:
+      type: object
+      required: [label, value]
+      properties:
+        label:
+          type: string
+          example: Confidence
+        value:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.96
+
+    AISignal:
+      type: object
+      required: [icon, text]
+      properties:
+        icon:
+          type: string
+          enum: [positive, negative, neutral]
+          example: negative
+        text:
+          type: string
+          example: "1 vendor exceeds 40% spend concentration"
+
+    AIAction:
+      type: object
+      required: [label, action, payload]
+      properties:
+        label:
+          type: string
+          example: View in network
+        action:
+          type: string
+          enum: [navigate, select_entity, ask]
+          example: navigate
+        payload:
+          type: object
+          description: Action-specific payload
+          example: { page: network }
+
+    AIResponseData:
+      type: object
+      required: [tools, response]
+      properties:
+        tools:
+          type: array
+          items:
+            type: object
+            required: [name, label]
+            properties:
+              name:
+                type: string
+                enum: [user_context, knowledge_graph, network_traverse, path_analysis, vector_search]
+                example: user_context
+              label:
+                type: string
+                example: Loading business context
+        response:
+          type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+              description: Main response text
+              example: "I found 6 vendors for Acme Construction Co, with a total annual spend of $1,485,000:"
+            entities:
+              type: array
+              items:
+                type: string
+              description: Entity IDs referenced in the response
+              example: ["e2", "e3", "e4"]
+            table:
+              $ref: "#/components/schemas/AITable"
+            chart:
+              $ref: "#/components/schemas/AIChart"
+            scores:
+              type: array
+              items:
+                $ref: "#/components/schemas/AIScore"
+            signals:
+              type: array
+              items:
+                $ref: "#/components/schemas/AISignal"
+            actions:
+              type: array
+              items:
+                $ref: "#/components/schemas/AIAction"
+            followup:
+              type: string
+              description: Follow-up commentary or multi-line summary
+              example: "Bob's Plumbing LLC is the largest vendor at $450,000/yr across 38 transactions."
+
+    # ── Request Bodies ───────────────────────────────────
+
+    AddConnectionRequest:
+      type: object
+      required: [connType]
+      properties:
+        connType:
+          type: string
+          enum: [vendor, client]
+          example: vendor
+        entity:
+          $ref: "#/components/schemas/Entity"
+          description: Existing entity to link (omit to create new)
+        name:
+          type: string
+          description: Name for new entity (when entity is not provided)
+          example: New Vendor LLC
+        city:
+          type: string
+          example: Austin
+        state:
+          type: string
+          example: TX
+
+    ResolveMatchRequest:
+      type: object
+      required: [resolution]
+      properties:
+        resolution:
+          type: string
+          enum: [accept, reject]
+          description: Whether to accept or reject the match
+          example: accept
+
+    ResolveEntityRequest:
+      type: object
+      description: Input data for ad-hoc entity resolution
+      properties:
+        name:
+          type: string
+          example: "Bob's Plumbing"
+        ein:
+          type: string
+          example: "74-2198463"
+        industry:
+          type: string
+          example: "238220"
+        city:
+          type: string
+          example: Austin
+        state:
+          type: string
+          example: TX
+
+    CreateNativeMergeRequest:
+      type: object
+      required: [sourceEntityId, targetEntityId]
+      properties:
+        sourceEntityId:
+          type: string
+          description: Entity being merged away
+          example: e9
+        targetEntityId:
+          type: string
+          description: Entity that survives
+          example: e4
+        reason:
+          type: string
+          example: SiteWork Pros is a DBA of R&J Electric
+        migratedRelationships:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+              target:
+                type: string
+
+    AssistQuery:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: "Who are Acme Construction's top vendors?"
+        context:
+          type: object
+          properties:
+            selectedEntity:
+              $ref: "#/components/schemas/Entity"
+            currentPage:
+              type: string
+              enum: [network, connections, review, search, assist]
+              example: network
+
+    # ── Shared Envelope & Error ──────────────────────────
+
+    Error:
+      type: object
+      required: [message, status]
+      properties:
+        message:
+          type: string
+          example: Entity not found
+        status:
+          type: integer
+          example: 404
+
+# ─────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────
+paths:
+  # ── Entities ─────────────────────────────────────────
+
+  /entities:
+    get:
+      operationId: getEntities
+      tags: [Entities]
+      summary: List all entities
+      description: Returns all golden-record entities. Supports filtering by text query and industry code.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Text search across entity name and variants
+        - name: industry
+          in: query
+          schema:
+            type: string
+          description: Filter by NAICS industry code
+      responses:
+        "200":
+          description: Entity list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Entity"
+                  total:
+                    type: integer
+                    example: 10
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /entities/{id}:
+    get:
+      operationId: getEntity
+      tags: [Entities]
+      summary: Get a single entity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e1
+      responses:
+        "200":
+          description: Entity detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Entity"
+        "404":
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    patch:
+      operationId: updateEntity
+      tags: [Entities]
+      summary: Partially update an entity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Any subset of Entity fields to update
+      responses:
+        "200":
+          description: Updated entity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Entity"
+        "404":
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Relationships ────────────────────────────────────
+
+  /relationships:
+    get:
+      operationId: getAllRelationships
+      tags: [Relationships]
+      summary: List all relationships
+      description: Returns every edge in the network graph.
+      responses:
+        "200":
+          description: All relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Relationship"
+
+  /entities/{id}/relationships:
+    get:
+      operationId: getEntityRelationships
+      tags: [Relationships]
+      summary: Get relationships for an entity
+      description: Returns all edges where the entity is either source or target.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e1
+      responses:
+        "200":
+          description: Entity relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Relationship"
+
+  /entities/{id}/network:
+    get:
+      operationId: getEntityNetwork
+      tags: [Relationships]
+      summary: Get ego network subgraph
+      description: |
+        BFS traversal from the given entity up to `depth` hops.
+        Returns all reachable entities and the relationships between them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e1
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            default: 2
+            minimum: 1
+            maximum: 5
+          description: Number of hops to traverse
+      responses:
+        "200":
+          description: Network subgraph
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      entities:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Entity"
+                      relationships:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Relationship"
+
+  /entities/{id}/volume:
+    get:
+      operationId: getEntityVolume
+      tags: [Relationships]
+      summary: Get monthly transaction volume
+      description: Returns time-series transaction volume data for charting.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e1
+      responses:
+        "200":
+          description: Monthly volume series
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MonthlyVolume"
+
+  # ── Search ───────────────────────────────────────────
+
+  /search:
+    get:
+      operationId: searchEntities
+      tags: [Search]
+      summary: Search entities
+      description: Full-text search across entity names and commodities with optional facets and sorting.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query
+          example: plumbing
+        - name: industry
+          in: query
+          schema:
+            type: string
+          description: Filter by NAICS industry code
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [volume, confidence, connections]
+          description: Sort results by field
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Entity"
+                  total:
+                    type: integer
+
+  # ── Matching ─────────────────────────────────────────
+
+  /matching/pending:
+    get:
+      operationId: getPendingMatches
+      tags: [Matching]
+      summary: List pending matches
+      description: Returns entity resolution matches awaiting human review.
+      responses:
+        "200":
+          description: Pending matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PendingMatch"
+
+  /matching/{id}/resolve:
+    post:
+      operationId: resolveMatch
+      tags: [Matching]
+      summary: Resolve a pending match
+      description: Accept or reject a pending entity resolution match.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Match ID
+          example: m1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveMatchRequest"
+      responses:
+        "200":
+          description: Resolution result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      matchId:
+                        type: string
+                        example: m1
+                      resolution:
+                        type: string
+                        enum: [accept, reject]
+                      resolvedAt:
+                        type: string
+                        format: date-time
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /matching/resolve:
+    post:
+      operationId: resolveEntity
+      tags: [Matching]
+      summary: Run ad-hoc entity resolution
+      description: |
+        Resolve an arbitrary input against the entity graph.
+        Returns one of three tiers:
+        - **Tier 0**: No match found
+        - **Tier 1**: Deterministic match (EIN or high-confidence name match)
+        - **Tier 2**: AI-ranked candidates requiring manual selection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveEntityRequest"
+      responses:
+        "200":
+          description: Resolution result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EntityResolutionResult"
+
+  # ── Connections ──────────────────────────────────────
+
+  /connections/auto:
+    get:
+      operationId: getAutoDetected
+      tags: [Connections]
+      summary: List auto-detected connections
+      description: Returns connections automatically resolved by the CDC pipeline.
+      responses:
+        "200":
+          description: Auto-detected connections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AutoDetected"
+
+  /connections/manual:
+    get:
+      operationId: getManualConnections
+      tags: [Connections]
+      summary: List manually added connections
+      description: Returns connections added by users through manual matching or entity creation.
+      responses:
+        "200":
+          description: Manual connections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ManualConnection"
+
+  /connections:
+    post:
+      operationId: addConnection
+      tags: [Connections]
+      summary: Add a manual connection
+      description: |
+        Link an existing entity or create a new entity and link it as a vendor/client.
+        If `entity` is provided, the connection is matched to an existing entity.
+        If `entity` is omitted, a new entity is created from `name`, `city`, `state`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddConnectionRequest"
+      responses:
+        "201":
+          description: Connection created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ManualConnection"
+
+  # ── Native Perspective ───────────────────────────────
+
+  /native/overrides:
+    get:
+      operationId: getNativeOverrides
+      tags: [Native]
+      summary: List all native overrides
+      description: Returns all user-specific attribute overrides keyed by entity ID.
+      responses:
+        "200":
+          description: Override map
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    additionalProperties:
+                      $ref: "#/components/schemas/OverrideFields"
+                    example:
+                      e4:
+                        city: Austin
+                        nickname: "R&J guys"
+                        tags: ["preferred"]
+
+  /native/overrides/{id}:
+    get:
+      operationId: getNativeOverride
+      tags: [Native]
+      summary: Get native overrides for an entity
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e4
+      responses:
+        "200":
+          description: Override fields (null if no overrides exist)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/OverrideFields"
+                      - type: "null"
+
+    patch:
+      operationId: saveNativeOverride
+      tags: [Native]
+      summary: Save native overrides for an entity
+      description: Merges the provided fields with any existing overrides for this entity.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OverrideFields"
+      responses:
+        "200":
+          description: Updated overrides
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OverrideFields"
+
+  /native/overrides/{id}/{field}:
+    delete:
+      operationId: deleteNativeOverride
+      tags: [Native]
+      summary: Delete a single field override
+      description: Removes a native override for one field, resetting it to the global value.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: e4
+        - name: field
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Field name to remove
+          example: city
+      responses:
+        "200":
+          description: Remaining overrides (null if none left)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/OverrideFields"
+                      - type: "null"
+
+  /native/merges:
+    get:
+      operationId: getNativeMerges
+      tags: [Native]
+      summary: List native merges
+      description: Returns all user-driven entity merges.
+      responses:
+        "200":
+          description: Merge list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NativeMerge"
+
+    post:
+      operationId: createNativeMerge
+      tags: [Native]
+      summary: Create a native merge
+      description: |
+        Merge a source entity into a target entity. The source entity is absorbed
+        and its relationships are migrated to the target. This is a user-driven,
+        native-scope merge (does not affect the global graph for other users).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNativeMergeRequest"
+      responses:
+        "201":
+          description: Merge created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NativeMerge"
+
+  /native/merges/{id}:
+    delete:
+      operationId: undoNativeMerge
+      tags: [Native]
+      summary: Undo a native merge
+      description: Reverses a merge, restoring the source entity and its original relationships.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: nm1
+      responses:
+        "200":
+          description: Undone merge
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NativeMerge"
+        "404":
+          description: Merge not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── AI / Assist (REST fallback) ──────────────────────
+
+  /ai/query:
+    post:
+      operationId: sendAIQuery
+      tags: [Entities]
+      summary: Send an AI assist query (REST fallback)
+      description: |
+        HTTP fallback for AI queries when WebSocket is unavailable.
+        Prefer the `ws://localhost:8080/ws/assist` WebSocket channel for
+        streaming tool calls and responses. This endpoint returns the
+        complete response synchronously.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssistQuery"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AIResponseData"
+
+# ─────────────────────────────────────────────────────────
+# WebSocket Channels (vendor extension)
+# ─────────────────────────────────────────────────────────
+x-websocket-channels:
+  /ws:
+    description: |
+      Real-time server-push events from the CDC pipeline.
+      The client connects on startup and subscribes to event types.
+      Reconnection uses exponential back-off (2s base, 5 max attempts).
+    subscribe:
+      messages:
+        connection.detected:
+          description: A new entity connection was auto-resolved by the CDC pipeline
+          payload:
+            type: object
+            required: [id, connType, source, sourceDate, entity, tier, confidence, latency, time]
+            properties:
+              id:
+                type: string
+                example: a-1708981234567
+              connType:
+                type: string
+                enum: [vendor, client]
+              source:
+                type: string
+                example: "Bill #1083"
+              sourceDate:
+                type: string
+                example: Feb 14
+              entity:
+                $ref: "#/components/schemas/Entity"
+              tier:
+                type: integer
+                example: 1
+              confidence:
+                type: number
+                format: float
+                example: 0.93
+              latency:
+                type: string
+                example: 35ms
+              time:
+                type: string
+                example: Just now
+
+        edge.updated:
+          description: Transaction volume changed on an existing relationship edge
+          payload:
+            type: object
+            required: [source, target, volumeDelta]
+            properties:
+              source:
+                type: string
+                example: e1
+              target:
+                type: string
+                example: e3
+              volumeDelta:
+                type: number
+                description: Volume change in USD
+                example: 5420
+
+        match.pending:
+          description: A new entity resolution match requires human review
+          payload:
+            type: object
+            required: [id, inputName, confidence]
+            properties:
+              id:
+                type: string
+                example: m-1708981234567
+              inputName:
+                type: string
+                example: New Vendor 42
+              confidence:
+                type: number
+                format: float
+                example: 0.72
+
+  /ws/assist:
+    description: |
+      Intuit Assist chat channel with streaming tool calls and responses.
+      Replaces the HTTP POST `/ai/query` endpoint for real-time delivery.
+
+      **Protocol flow:**
+      ```
+      Client                    Server
+        |--- query ------------>|
+        |<--- tool_start -------|  (repeated per tool)
+        |<--- tool_start -------|
+        |<--- response ---------|  (or error)
+      ```
+
+      The server streams `tool_start` messages as each tool begins execution,
+      then sends a final `response` (or `error`) message with the complete result.
+    publish:
+      messages:
+        query:
+          description: Client sends a natural-language query with optional context
+          payload:
+            type: object
+            required: [type, message]
+            properties:
+              type:
+                type: string
+                const: query
+              message:
+                type: string
+                example: "Who are Acme Construction's top vendors?"
+              context:
+                type: object
+                properties:
+                  selectedEntity:
+                    $ref: "#/components/schemas/Entity"
+                  currentPage:
+                    type: string
+                    enum: [network, connections, review, search, assist]
+
+    subscribe:
+      messages:
+        tool_start:
+          description: |
+            Sent once per tool as the server begins executing it.
+            Tool names: `user_context`, `knowledge_graph`, `network_traverse`,
+            `path_analysis`, `vector_search`.
+          payload:
+            type: object
+            required: [type, tool]
+            properties:
+              type:
+                type: string
+                const: tool_start
+              tool:
+                type: object
+                required: [name, label]
+                properties:
+                  name:
+                    type: string
+                    enum: [user_context, knowledge_graph, network_traverse, path_analysis, vector_search]
+                    example: knowledge_graph
+                  label:
+                    type: string
+                    example: Querying vendor relationships
+
+        response:
+          description: Final structured response after all tools complete
+          payload:
+            type: object
+            required: [type, data]
+            properties:
+              type:
+                type: string
+                const: response
+              data:
+                type: object
+                description: Same shape as AIResponseData.response
+                required: [content]
+                properties:
+                  content:
+                    type: string
+                  entities:
+                    type: array
+                    items:
+                      type: string
+                  table:
+                    $ref: "#/components/schemas/AITable"
+                  chart:
+                    $ref: "#/components/schemas/AIChart"
+                  scores:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AIScore"
+                  signals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AISignal"
+                  actions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AIAction"
+                  followup:
+                    type: string
+
+        error:
+          description: Error response if query processing fails
+          payload:
+            type: object
+            required: [type, message]
+            properties:
+              type:
+                type: string
+                const: error
+              message:
+                type: string
+                example: Failed to process query

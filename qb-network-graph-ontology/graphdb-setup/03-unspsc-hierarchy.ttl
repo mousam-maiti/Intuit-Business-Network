@@ -1,0 +1,177 @@
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix qb:     <http://qb.intuit.com/ontology/> .
+@prefix unspsc: <http://qb.intuit.com/unspsc/> .
+
+# ============================================================
+# UNSPSC HIERARCHY — Demo Subset
+#
+# Structure: Segment (2-digit) → Family (4-digit) →
+#            Class (6-digit) → Commodity (8-digit)
+#
+# Covers commodities that cross-link to NAICS sectors in the
+# demo: plumbing services/supplies, electrical, construction
+# materials, food service supplies.
+# ============================================================
+
+# --- Segment 72: Building and Facility Construction and Maintenance Services ---
+
+unspsc:72 a qb:UNSPSCCode ;
+    rdfs:label "Building and Facility Construction and Maintenance Services" .
+
+unspsc:7215 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing and Heating Services" ;
+    rdfs:subClassOf unspsc:72 .
+
+unspsc:72151500 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing Services" ;
+    rdfs:subClassOf unspsc:7215 .
+
+unspsc:72151501 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing Installation" ;
+    rdfs:subClassOf unspsc:72151500 .
+
+unspsc:72151502 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing Repair and Maintenance" ;
+    rdfs:subClassOf unspsc:72151500 .
+
+unspsc:72151600 a qb:UNSPSCCode ;
+    rdfs:label "Heating System Services" ;
+    rdfs:subClassOf unspsc:7215 .
+
+unspsc:7214 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Services" ;
+    rdfs:subClassOf unspsc:72 .
+
+unspsc:72141000 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Installation" ;
+    rdfs:subClassOf unspsc:7214 .
+
+unspsc:72141100 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Repair and Maintenance" ;
+    rdfs:subClassOf unspsc:7214 .
+
+unspsc:7211 a qb:UNSPSCCode ;
+    rdfs:label "Building Construction Services" ;
+    rdfs:subClassOf unspsc:72 .
+
+unspsc:72111000 a qb:UNSPSCCode ;
+    rdfs:label "Residential Building Construction Services" ;
+    rdfs:subClassOf unspsc:7211 .
+
+unspsc:72112000 a qb:UNSPSCCode ;
+    rdfs:label "Commercial Building Construction Services" ;
+    rdfs:subClassOf unspsc:7211 .
+
+unspsc:7212 a qb:UNSPSCCode ;
+    rdfs:label "Building Maintenance Services" ;
+    rdfs:subClassOf unspsc:72 .
+
+unspsc:72121000 a qb:UNSPSCCode ;
+    rdfs:label "Painting and Coating Services" ;
+    rdfs:subClassOf unspsc:7212 .
+
+# --- Segment 40: Distribution and Conditioning Systems and Equipment ---
+
+unspsc:40 a qb:UNSPSCCode ;
+    rdfs:label "Distribution and Conditioning Systems and Equipment" .
+
+unspsc:4014 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing Fixtures" ;
+    rdfs:subClassOf unspsc:40 .
+
+unspsc:40141600 a qb:UNSPSCCode ;
+    rdfs:label "Pipe Fittings" ;
+    rdfs:subClassOf unspsc:4014 .
+
+unspsc:40141601 a qb:UNSPSCCode ;
+    rdfs:label "PVC Pipe Fittings" ;
+    rdfs:subClassOf unspsc:40141600 .
+
+unspsc:40141602 a qb:UNSPSCCode ;
+    rdfs:label "Copper Pipe Fittings" ;
+    rdfs:subClassOf unspsc:40141600 .
+
+unspsc:40141700 a qb:UNSPSCCode ;
+    rdfs:label "Valves" ;
+    rdfs:subClassOf unspsc:4014 .
+
+unspsc:40141800 a qb:UNSPSCCode ;
+    rdfs:label "Plumbing Faucets and Supplies" ;
+    rdfs:subClassOf unspsc:4014 .
+
+unspsc:4015 a qb:UNSPSCCode ;
+    rdfs:label "Heating and Ventilation Equipment" ;
+    rdfs:subClassOf unspsc:40 .
+
+unspsc:40151500 a qb:UNSPSCCode ;
+    rdfs:label "Water Heaters" ;
+    rdfs:subClassOf unspsc:4015 .
+
+# --- Segment 39: Electrical Equipment and Components ---
+
+unspsc:39 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Systems and Lighting and Components" .
+
+unspsc:3912 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Wire and Cable" ;
+    rdfs:subClassOf unspsc:39 .
+
+unspsc:39121000 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Wire" ;
+    rdfs:subClassOf unspsc:3912 .
+
+unspsc:3911 a qb:UNSPSCCode ;
+    rdfs:label "Electrical Switches and Controls" ;
+    rdfs:subClassOf unspsc:39 .
+
+# --- Segment 30: Building Materials ---
+
+unspsc:30 a qb:UNSPSCCode ;
+    rdfs:label "Structural Building Materials" .
+
+unspsc:3011 a qb:UNSPSCCode ;
+    rdfs:label "Lumber and Wood Products" ;
+    rdfs:subClassOf unspsc:30 .
+
+unspsc:30111600 a qb:UNSPSCCode ;
+    rdfs:label "Lumber" ;
+    rdfs:subClassOf unspsc:3011 .
+
+unspsc:3012 a qb:UNSPSCCode ;
+    rdfs:label "Concrete and Cement" ;
+    rdfs:subClassOf unspsc:30 .
+
+unspsc:30121500 a qb:UNSPSCCode ;
+    rdfs:label "Ready Mix Concrete" ;
+    rdfs:subClassOf unspsc:3012 .
+
+# --- Segment 50: Food and Beverage Products ---
+
+unspsc:50 a qb:UNSPSCCode ;
+    rdfs:label "Food Beverage and Tobacco Products" .
+
+unspsc:5010 a qb:UNSPSCCode ;
+    rdfs:label "Meat and Poultry Products" ;
+    rdfs:subClassOf unspsc:50 .
+
+unspsc:5013 a qb:UNSPSCCode ;
+    rdfs:label "Dairy Products and Eggs" ;
+    rdfs:subClassOf unspsc:50 .
+
+unspsc:5015 a qb:UNSPSCCode ;
+    rdfs:label "Prepared and Preserved Foods" ;
+    rdfs:subClassOf unspsc:50 .
+
+# --- Segment 90: Travel and Food and Lodging ---
+
+unspsc:90 a qb:UNSPSCCode ;
+    rdfs:label "Travel and Food and Lodging and Entertainment Services" .
+
+unspsc:9010 a qb:UNSPSCCode ;
+    rdfs:label "Restaurant and Catering Services" ;
+    rdfs:subClassOf unspsc:90 .
+
+unspsc:90101500 a qb:UNSPSCCode ;
+    rdfs:label "Restaurant Services" ;
+    rdfs:subClassOf unspsc:9010 .
