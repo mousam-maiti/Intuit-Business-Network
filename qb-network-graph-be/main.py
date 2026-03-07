@@ -23,7 +23,6 @@ from repositories.neo4j_relationship_repo import Neo4jRelationshipRepository
 from repositories.neo4j_search_repo import Neo4jSearchRepository
 from repositories.paimon_lineage_repo import PaimonLineageRepository
 from repositories.paimon_resolution_repo import PaimonResolutionRepository
-from repositories.mysql_connection_repo import MySQLConnectionRepository
 from repositories.mysql_native_repo import MySQLNativeRepository
 from repositories.paimon_alert_repo import PaimonAlertRepository
 from repositories.mysql_volume_repo import MySQLVolumeRepository
@@ -70,6 +69,12 @@ try:
     HAS_NEO4J = True
 except ImportError:
     HAS_NEO4J = False
+
+try:
+    import redis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
 
 
 @asynccontextmanager
@@ -119,6 +124,23 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("neo4j driver not installed — Neo4j unavailable")
 
+    # ── Connect Redis (search cache) ───────────────────────
+    redis_client = None
+    if HAS_REDIS:
+        try:
+            redis_client = redis.Redis(
+                host=cfg.redis.host, port=cfg.redis.port,
+                db=cfg.redis.db, decode_responses=True,
+                socket_connect_timeout=3,
+            )
+            redis_client.ping()
+            logger.info(f"Redis connected: {cfg.redis.host}:{cfg.redis.port}/db{cfg.redis.db}")
+        except Exception as e:
+            logger.warning(f"Redis unavailable ({e}) — search cache disabled")
+            redis_client = None
+    else:
+        logger.warning("redis package not installed — search cache disabled")
+
     # ── Connect Flink SQL Gateway (for writes only) ──────
     flink_client = FlinkSQLClient(base_url=cfg.flink_sql.url, timeout=cfg.flink_sql.timeout)
     flink_client.connect()
@@ -138,16 +160,23 @@ async def lifespan(app: FastAPI):
     alert_repo = PaimonAlertRepository(paimon_client, flink_client=flink_client)
 
     # MySQL-backed repos (OLTP source data only)
-    connection_repo = MySQLConnectionRepository(mysql_pool) if mysql_pool else None
     native_repo = MySQLNativeRepository(mysql_pool) if mysql_pool else None
     volume_repo = MySQLVolumeRepository(mysql_pool, flink_client) if mysql_pool else None
 
     # ── Build services ───────────────────────────────────
     app.state.entity_service = EntityService(entity_repo, fallback_repo=volume_repo)
     app.state.relationship_service = RelationshipService(relationship_repo, volume_repo)
-    app.state.search_service = SearchService(search_repo)
+    app.state.search_service = SearchService(
+        search_repo, redis_client=redis_client,
+        search_ttl=cfg.redis.search_ttl,
+        search_max_keys=cfg.redis.search_max_keys,
+    )
     app.state.matching_service = MatchingService(resolution_repo, entity_repo=entity_repo, relationship_repo=relationship_repo, sync_url=cfg.sync.url)
-    app.state.connection_service = ConnectionService(connection_repo, alert_repo)
+    app.state.connection_service = ConnectionService(
+        paimon_client, alert_repo,
+        neo4j_driver=neo4j_driver, neo4j_database=cfg.neo4j.database,
+        entity_repo=entity_repo, relationship_repo=relationship_repo,
+    )
     app.state.native_service = NativeService(native_repo)
     app.state.alert_service = AlertService(alert_repo)
     app.state.lineage_service = LineageService(lineage_repo, entity_repo=entity_repo)

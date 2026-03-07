@@ -11,3 +11,7 @@ export async function getManualConnections() {
 export async function addConnection(payload) {
   return apiClient.post('/connections', payload);
 }
+
+export async function addExistingConnection(goldenRecordId, connType) {
+  return apiClient.post('/connections/add-network', { goldenRecordId, connType });
+}

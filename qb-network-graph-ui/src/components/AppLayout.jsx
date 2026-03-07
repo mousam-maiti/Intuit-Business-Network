@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Search, Home, Globe, ClipboardCheck, Sparkles,
@@ -40,15 +40,19 @@ export default function AppLayout() {
     getPendingMatches().then(r => setPendingCount(r.data.length)).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    getEntity(config.currentEntityId).then(r => {
-      if (r.data) setSelectedEntity(r.data);
-    }).catch(() => {});
-    getNetwork(config.currentEntityId, 5).then(r => {
+  const refreshNetwork = useCallback(() => {
+    return getNetwork(config.currentEntityId, 5).then(r => {
       setNetworkEntities(r.data.entities || []);
       setNetworkRelationships(r.data.relationships || []);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    getEntity(config.currentEntityId).then(r => {
+      if (r.data) setSelectedEntity(r.data);
+    }).catch(() => {});
+    refreshNetwork();
+  }, [refreshNetwork]);
 
   // Poll alerts every 5 seconds
   useEffect(() => {
@@ -208,7 +212,7 @@ export default function AppLayout() {
 
         {/* Page content via React Router Outlet */}
         <main className="flex-1 min-h-0 overflow-hidden">
-          <Outlet context={{ selectedEntity, setSelectedEntity, chat, goTo, networkEntities, networkRelationships }} />
+          <Outlet context={{ selectedEntity, setSelectedEntity, chat, goTo, networkEntities, networkRelationships, refreshNetwork }} />
         </main>
       </div>
 

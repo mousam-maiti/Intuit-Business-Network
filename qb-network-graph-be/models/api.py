@@ -127,6 +127,11 @@ class AddConnectionRequest(BaseModel):
     paymentTerms: Optional[str] = None
 
 
+class AddExistingConnectionRequest(BaseModel):
+    goldenRecordId: str
+    connType: str  # "vendor" | "client"
+
+
 # ── Native overrides ────────────────────────────────────
 
 class NativeOverrideUpdate(BaseModel):

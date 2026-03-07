@@ -81,6 +81,15 @@ class SyncConfig:
 
 
 @dataclass
+class RedisConfig:
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 2
+    search_ttl: int = 86400     # 1 day
+    search_max_keys: int = 200  # LRU eviction cap
+
+
+@dataclass
 class TelemetryConfig:
     enabled: bool = True
     service_name: str = "qb-backend-api"
@@ -97,6 +106,7 @@ class AppConfig:
     flink_sql: FlinkSQLConfig = field(default_factory=FlinkSQLConfig)
     paimon: PaimonConfig = field(default_factory=PaimonConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
+    redis: RedisConfig = field(default_factory=RedisConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
@@ -124,6 +134,7 @@ def load_config(path: str | None = None) -> AppConfig:
         flink_sql=_build(FlinkSQLConfig, raw.get("flink_sql")),
         paimon=_build(PaimonConfig, raw.get("paimon")),
         sync=_build(SyncConfig, raw.get("sync")),
+        redis=_build(RedisConfig, raw.get("redis")),
         telemetry=_build(TelemetryConfig, raw.get("telemetry")),
     )
 
@@ -153,6 +164,12 @@ def load_config(path: str | None = None) -> AppConfig:
     cfg.paimon.warehouse_path = _env("PAIMON_WAREHOUSE_PATH", cfg.paimon.warehouse_path)
 
     cfg.sync.url = _env("SYNC_URL", cfg.sync.url)
+
+    cfg.redis.host = _env("REDIS_HOST", cfg.redis.host)
+    cfg.redis.port = _env("REDIS_PORT", cfg.redis.port, int)
+    cfg.redis.db = _env("REDIS_DB", cfg.redis.db, int)
+    cfg.redis.search_ttl = _env("REDIS_SEARCH_TTL", cfg.redis.search_ttl, int)
+    cfg.redis.search_max_keys = _env("REDIS_SEARCH_MAX_KEYS", cfg.redis.search_max_keys, int)
 
     # Telemetry
     cfg.telemetry.enabled = _env("OTEL_ENABLED", cfg.telemetry.enabled, bool)

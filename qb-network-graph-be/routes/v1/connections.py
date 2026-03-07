@@ -1,8 +1,8 @@
-"""Connection routes: GET /connections/auto, GET /connections/manual, POST /connections."""
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+"""Connection routes: GET /connections/auto, GET /connections/manual, POST /connections, POST /connections/add-network."""
+from fastapi import APIRouter, Depends
 
 from dependencies import get_connection_service
-from models.api import AddConnectionRequest
+from models.api import AddConnectionRequest, AddExistingConnectionRequest
 from services.connection_service import ConnectionService
 
 router = APIRouter()
@@ -20,16 +20,21 @@ def get_manual_connections(svc: ConnectionService = Depends(get_connection_servi
 
 @router.post("/connections")
 async def add_connection(
-    request: Request,
     body: AddConnectionRequest,
-    background_tasks: BackgroundTasks,
     svc: ConnectionService = Depends(get_connection_service),
 ):
     payload = body.model_dump()
     result = svc.add(payload)
+    return {"data": result}
 
-    background_tasks.add_task(
-        svc.resolve_async, request.app, result["id"], payload,
+
+@router.post("/connections/add-network")
+async def add_existing_connection(
+    body: AddExistingConnectionRequest,
+    svc: ConnectionService = Depends(get_connection_service),
+):
+    result = svc.add_existing(
+        golden_record_id=body.goldenRecordId,
+        conn_type=body.connType,
     )
-
     return {"data": result}

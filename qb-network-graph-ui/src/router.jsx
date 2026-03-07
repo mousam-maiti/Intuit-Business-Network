@@ -40,8 +40,8 @@ function NetworkWrapper() {
 }
 
 function SearchWrapper() {
-  const { goTo, networkEntities, networkRelationships } = useOutletContext();
-  return <LazyWrap><SearchPage onNavigate={goTo} networkEntities={networkEntities} networkRelationships={networkRelationships} /></LazyWrap>;
+  const { goTo, networkRelationships, refreshNetwork } = useOutletContext();
+  return <LazyWrap><SearchPage onNavigate={goTo} networkRelationships={networkRelationships} refreshNetwork={refreshNetwork} /></LazyWrap>;
 }
 
 function ReviewWrapper() {

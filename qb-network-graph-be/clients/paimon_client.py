@@ -108,7 +108,7 @@ class PaimonClient:
     @staticmethod
     def _paimon_to_arrow_type(paimon_type: str):
         """Convert a Paimon type string to a PyArrow type."""
-        t = paimon_type.strip()
+        t = paimon_type.strip().replace(" NOT NULL", "")
         m = re.match(r"DECIMAL\((\d+),\s*(\d+)\)", t)
         if m:
             return pa.decimal128(int(m.group(1)), int(m.group(2)))
@@ -116,7 +116,7 @@ class PaimonClient:
         if m:
             unit = "ms" if int(m.group(1)) == 3 else "us"
             return pa.timestamp(unit)
-        return {"STRING": pa.string(), "INT": pa.int32()}.get(t, pa.string())
+        return {"STRING": pa.string(), "INT": pa.int32(), "BIGINT": pa.int64(), "DATE": pa.date32()}.get(t, pa.string())
 
     @staticmethod
     def _coerce_value(val, paimon_type: str):
@@ -128,7 +128,7 @@ class PaimonClient:
             return None
         if str(val) == "NaT":
             return None
-        t = paimon_type.strip()
+        t = paimon_type.strip().replace(" NOT NULL", "")
         if "DECIMAL" in t:
             m = re.match(r"DECIMAL\((\d+),\s*(\d+)\)", t)
             scale = int(m.group(2)) if m else 3
@@ -139,8 +139,12 @@ class PaimonClient:
             if isinstance(val, datetime):
                 return pd.Timestamp(val)
             return val
-        if t == "INT":
+        if t in ("INT", "BIGINT"):
             return int(val)
+        if t == "DATE":
+            if isinstance(val, str):
+                return datetime.strptime(val, "%Y-%m-%d").date()
+            return val
         return str(val) if not isinstance(val, str) else val
 
     def write_row(self, table_name: str, row: dict):

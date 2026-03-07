@@ -31,7 +31,8 @@ class Neo4jSearchRepository(AbstractSearchRepository):
         records = self._run(cypher, params)
         return records[0] if records else None
 
-    def search(self, q: str = None, industry: str = None, sort_by: str = None) -> list[dict]:
+    def search(self, q: str = None, industry: str = None, sort_by: str = None,
+               limit: int = 100) -> list[dict]:
         if not self.available:
             return []
 
@@ -41,7 +42,7 @@ class Neo4jSearchRepository(AbstractSearchRepository):
                 YIELD node AS e, score
                 WHERE e.status <> 'MERGED'
             """
-            params = {"q": f"{q}*"}
+            params = {"q": f"{q}*", "lim": limit}
             if industry:
                 cypher += " AND e.naics_code STARTS WITH $industry"
                 params["industry"] = industry
@@ -53,16 +54,16 @@ class Neo4jSearchRepository(AbstractSearchRepository):
                      count(DISTINCT st) AS client_count
             """
             if sort_by == "volume":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC LIMIT $lim"
             elif sort_by == "confidence":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY e.confidence DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY e.confidence DESC LIMIT $lim"
             elif sort_by == "connections":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY (vendor_count + client_count) DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY (vendor_count + client_count) DESC LIMIT $lim"
             else:
-                cypher += " RETURN e, vendor_count, client_count ORDER BY score DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY score DESC LIMIT $lim"
         else:
             cypher = "MATCH (e:Entity) WHERE e.status <> 'MERGED'"
-            params = {}
+            params = {"lim": limit}
             if industry:
                 cypher += " AND e.naics_code STARTS WITH $industry"
                 params["industry"] = industry
@@ -74,13 +75,13 @@ class Neo4jSearchRepository(AbstractSearchRepository):
                      count(DISTINCT st) AS client_count
             """
             if sort_by == "volume":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY e.total_volume DESC LIMIT $lim"
             elif sort_by == "confidence":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY e.confidence DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY e.confidence DESC LIMIT $lim"
             elif sort_by == "connections":
-                cypher += " RETURN e, vendor_count, client_count ORDER BY (vendor_count + client_count) DESC"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY (vendor_count + client_count) DESC LIMIT $lim"
             else:
-                cypher += " RETURN e, vendor_count, client_count ORDER BY e.canonical_name"
+                cypher += " RETURN e, vendor_count, client_count ORDER BY e.canonical_name LIMIT $lim"
 
         records = self._run(cypher, params)
         return [

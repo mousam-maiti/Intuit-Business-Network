@@ -55,7 +55,7 @@ class AbstractRelationshipRepository(ABC):
 
 class AbstractSearchRepository(ABC):
     @abstractmethod
-    def search(self, q: str = None, industry: str = None, sort_by: str = None) -> list[dict]:
+    def search(self, q: str = None, industry: str = None, sort_by: str = None, limit: int = 100) -> list[dict]:
         ...
 
     @abstractmethod

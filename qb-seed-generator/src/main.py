@@ -2,14 +2,18 @@
 """
 QB Network Graph — Seed Data Generator
 
-Two independent steps:
-  1. Generate seed files:   python -m src.main generate
-  2. Load into MySQL:       python -m src.main seed
+Four commands:
+  1. Generate seed files:     python -m src.main generate
+  2. Load into MySQL:         python -m src.main seed
+  3. Seed global network:     python -m src.main network
+  4. Seed direct connections: python -m src.main connections
 
 Generate always writes to seed/. Seed always reads from seed/.
 This makes it repeatable — same files, same DB state every time.
 
 Combined:                   python -m src.main generate seed
+Full pipeline:              python -m src.main network generate seed
+Post-classifier:            python -m src.main connections
 """
 
 import sys
@@ -137,25 +141,45 @@ def cmd_seed():
     )
 
 
+def cmd_network():
+    """Seed the Intuit Business Network (100 global businesses → Neo4j)."""
+    from src.generators.network_seed import cmd_network as _run
+    _run()
+
+
+def cmd_connections():
+    """Seed direct connections for Acme Construction via backend API."""
+    from src.generators.connection_seed import cmd_connections as _run
+    _run()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="QB Network Graph Seed Generator",
         epilog="Examples:\n"
-               "  python -m src.main generate         # Generate seed files\n"
-               "  python -m src.main seed             # Load seed files into MySQL\n"
-               "  python -m src.main generate seed    # Both\n",
+               "  python -m src.main generate           # Generate seed files\n"
+               "  python -m src.main seed               # Load seed files into MySQL\n"
+               "  python -m src.main generate seed      # Both\n"
+               "  python -m src.main network            # Seed global business network\n"
+               "  python -m src.main connections         # Seed direct connections\n"
+               "  python -m src.main network connections # Full pipeline\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "commands",
         nargs="+",
-        choices=["generate", "seed"],
-        help="generate = create seed files, seed = load into MySQL",
+        choices=["generate", "seed", "network", "connections"],
+        help="network = seed global network, connections = seed direct connections, "
+             "generate = create seed files, seed = load into MySQL",
     )
     args = parser.parse_args()
 
     for cmd in args.commands:
-        if cmd == "generate":
+        if cmd == "network":
+            cmd_network()
+        elif cmd == "connections":
+            cmd_connections()
+        elif cmd == "generate":
             cmd_generate()
         elif cmd == "seed":
             cmd_seed()

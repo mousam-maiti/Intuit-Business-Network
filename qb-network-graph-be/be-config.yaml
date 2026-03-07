@@ -19,6 +19,13 @@ neo4j:
   database: neo4j
   max_pool_size: 10
 
+redis:
+  host: localhost
+  port: 6379
+  db: 2
+  search_ttl: 86400      # 1 day TTL per cached search
+  search_max_keys: 200   # LRU eviction cap
+
 entity_agent:
   url: "http://localhost:8085"
   timeout: 30

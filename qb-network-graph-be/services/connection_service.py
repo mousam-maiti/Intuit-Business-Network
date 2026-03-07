@@ -1,36 +1,85 @@
-"""Connection service — auto/manual connections with background resolution."""
+"""Connection service — reads/writes entity_connections via Paimon."""
 from __future__ import annotations
 
 import logging
-import re
+import math
+import time
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 
-from repositories.base import AbstractConnectionRepository, AbstractAlertRepository
+from clients.paimon_client import PaimonClient
+from repositories.base import AbstractAlertRepository
 
 logger = logging.getLogger(__name__)
 
+# Manual connections use epoch-ms IDs (≥ 1 billion);
+# CDC auto-increment IDs from the source DB are always < 1 billion.
+_MANUAL_ID_THRESHOLD = 1_000_000_000
+
+
+def _sanitize_row(row: dict) -> dict:
+    """Replace NaN/Inf floats with None so JSON serialization succeeds."""
+    return {k: (None if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
+            for k, v in row.items()}
+
 
 class ConnectionService:
-    def __init__(
-        self,
-        connection_repo: AbstractConnectionRepository,
-        alert_repo: AbstractAlertRepository,
-    ):
-        self._repo = connection_repo
+    def __init__(self, paimon: PaimonClient, alert_repo: AbstractAlertRepository,
+                 neo4j_driver=None, neo4j_database: str = "neo4j",
+                 entity_repo=None, relationship_repo=None):
+        self._paimon = paimon
         self._alert_repo = alert_repo
+        self._neo4j_driver = neo4j_driver
+        self._neo4j_db = neo4j_database
+        self._entity_repo = entity_repo
+        self._relationship_repo = relationship_repo
+
+    def _neo4j_run(self, cypher: str, params: dict = None) -> list[dict]:
+        with self._neo4j_driver.session(database=self._neo4j_db) as session:
+            result = session.run(cypher, params or {})
+            return [dict(record) for record in result]
 
     def get_auto(self) -> dict:
-        return {"data": self._repo.get_auto()}
+        rows = self._paimon.read_table("network_graph.entity_connections")
+        return {"data": [_sanitize_row(r) for r in rows if r.get("connection_id", 0) < _MANUAL_ID_THRESHOLD]}
 
     def get_manual(self) -> dict:
-        return {"data": self._repo.get_manual()}
+        rows = self._paimon.read_table("network_graph.entity_connections")
+        return {"data": [_sanitize_row(r) for r in rows if r.get("connection_id", 0) >= _MANUAL_ID_THRESHOLD]}
 
     def add(self, payload: dict) -> dict:
-        result = self._repo.add(payload)
-        connection_id = result["id"]
+        connection_id = int(time.time() * 1000)
 
+        row = {
+            "company_id": 1,
+            "connection_id": connection_id,
+            "connection_type": payload.get("connType"),
+            "display_name": payload.get("name"),
+            "ein": payload.get("ein"),
+            "contact_name": payload.get("contactName"),
+            "email": payload.get("email"),
+            "phone": payload.get("phone"),
+            "category": payload.get("category"),
+            "commodity": payload.get("commodity"),
+            "street_address": payload.get("address"),
+            "city": payload.get("city"),
+            "state": payload.get("state"),
+            "zip": payload.get("zip"),
+            "website": payload.get("website"),
+            "expected_volume": Decimal(payload["expectedVolume"]) if payload.get("expectedVolume") else None,
+            "payment_terms": payload.get("paymentTerms"),
+            "updated_at": datetime.now(timezone.utc),
+        }
+        self._paimon.write_row("network_graph.entity_connections", row)
+
+        # Create alert for the new connection
         alert_id = f"a-{uuid.uuid4().hex[:8]}"
-        entity_name = (payload.get("entity") or {}).get("name") if payload.get("entity") else payload.get("name")
+        entity_name = (
+            (payload.get("entity") or {}).get("name")
+            if payload.get("entity")
+            else payload.get("name")
+        )
         self._alert_repo.insert(
             alert_id=alert_id,
             connection_id=connection_id,
@@ -39,119 +88,89 @@ class ConnectionService:
             message=f"{entity_name or 'New connection'} added as {payload.get('connType', 'vendor')}. Entity resolution running.",
             entity_name=entity_name,
         )
-        return result
 
-    async def resolve_async(self, app, connection_id: str, payload: dict):
-        """Background task: build ClassifiedPersona and POST to entity agent."""
-        http_client = app.state.http_client
+        return {"id": connection_id, "status": "written"}
 
-        try:
-            self._repo.update_agent_status(connection_id, "pending")
+    def add_existing(self, golden_record_id: str, conn_type: str, company_id: str = "1") -> dict:
+        """Add an existing golden record entity to the user's network.
 
-            name = payload.get("name") or ""
-            ein_raw = payload.get("ein") or ""
-            email = payload.get("email") or ""
-            phone_raw = payload.get("phone") or ""
-            city = payload.get("city") or ""
-            state = payload.get("state") or ""
-            zip_code = payload.get("zip") or ""
-            commodity = payload.get("commodity") or ""
+        Creates a direct Neo4j relationship between the user's entity and the
+        target, then returns the target + all its 1-hop neighbors so the UI
+        can pull them into the network graph.
+        """
+        if not self._neo4j_driver:
+            return {"error": "Neo4j unavailable", "added": 0}
 
-            ein_clean = re.sub(r"\D", "", ein_raw)
-            phone_digits = re.sub(r"\D", "", phone_raw)
-            email_domain = email.split("@")[-1] if "@" in email else ""
-            zip5 = zip_code[:5] if zip_code else ""
-            zip3 = zip_code[:3] if zip_code else ""
-            top_keywords = [kw.strip() for kw in commodity.split(",") if kw.strip()][:3]
+        # 1. Create relationship between user entity and target
+        if conn_type == "vendor":
+            # User buys from this entity
+            rel_cypher = """
+                MATCH (user:Entity {id: $company_id}), (target:Entity {id: $target_id})
+                MERGE (user)-[r:BUYS_FROM]->(target)
+                ON CREATE SET r.volume = 0, r.count = 0, r.status = 'ACTIVE',
+                              r.created_at = datetime()
+                RETURN target.canonical_name AS target_name
+            """
+        else:
+            # Entity buys from user (user is the vendor/seller)
+            rel_cypher = """
+                MATCH (user:Entity {id: $company_id}), (target:Entity {id: $target_id})
+                MERGE (target)-[r:BUYS_FROM]->(user)
+                ON CREATE SET r.volume = 0, r.count = 0, r.status = 'ACTIVE',
+                              r.created_at = datetime()
+                RETURN target.canonical_name AS target_name
+            """
 
-            classified_persona = {
-                "identity": {
-                    "normalized_name": name.upper(),
-                    "name_first_token": name.split()[0].upper() if name.strip() else "",
-                    "ein_clean": ein_clean or None,
-                    "phone_digits": phone_digits or None,
-                    "email": email or None,
-                    "email_domain": email_domain or None,
-                },
-                "industry": {
-                    "original_category": payload.get("category"),
-                },
-                "location": {
-                    "state": state.upper() if state else "",
-                    "city_norm": city.upper() if city else None,
-                    "zip5": zip5 or None,
-                    "zip3": zip3 or None,
-                },
-                "commodity": {
-                    "top_keywords": top_keywords,
-                },
-                "behavioral": {
-                    "payment_terms": payload.get("paymentTerms"),
-                },
-            }
+        result = self._neo4j_run(rel_cypher, {
+            "company_id": company_id,
+            "target_id": golden_record_id,
+        })
+        target_name = result[0]["target_name"] if result else golden_record_id
 
-            event_id = f"conn-{connection_id}"
-            record_id = f"manual-{connection_id}"
-            request_body = {
-                "event_id": event_id,
-                "record_id": record_id,
-                "record_type": payload.get("connType", "vendor"),
-                "company_id": 1,
-                "classified_persona": classified_persona,
-                "fast_mode": True,
-            }
+        # 2. Get all 1-hop neighbors of the target entity (these become part of the user's extended network)
+        neighbor_cypher = """
+            MATCH (target:Entity {id: $target_id})-[r]-(neighbor:Entity)
+            WHERE neighbor.status <> 'MERGED' AND neighbor.id <> $company_id
+            RETURN DISTINCT neighbor.id AS id, neighbor.canonical_name AS name, type(r) AS rel_type
+        """
+        neighbors = self._neo4j_run(neighbor_cypher, {
+            "target_id": golden_record_id,
+            "company_id": company_id,
+        })
 
-            # ── Two-pass: fast deterministic first, full if ambiguous ──
-            resp = await http_client.post("/api/v1/resolve", json=request_body)
-            resp.raise_for_status()
-            data = resp.json()
+        # 3. Fetch full entity details for target + neighbors
+        neighbor_ids = [n["id"] for n in neighbors]
+        all_ids = [golden_record_id] + neighbor_ids
 
-            if data.get("decision") == "REVIEW" and data.get("agent_metadata", {}).get("fast_mode_deferred"):
-                logger.info(f"Fast pass deferred connection {connection_id} — retrying with full resolution")
-                request_body["fast_mode"] = False
-                resp = await http_client.post("/api/v1/resolve", json=request_body)
-                resp.raise_for_status()
-                data = resp.json()
+        entities = []
+        if self._entity_repo:
+            entities = self._entity_repo.batch_fetch(all_ids)
 
-            decision = data.get("decision", "NEW_ENTITY")
-            confidence = data.get("confidence", 0.0)
-            target_id = data.get("target_golden_record_id")
+        # 4. Get all edges among these entities
+        relationships = []
+        if self._relationship_repo:
+            relationships = self._relationship_repo._get_edges_between(all_ids + [company_id])
 
-            self._repo.update_agent_status(connection_id, "resolved", decision, target_id)
+        # 5. Create alert
+        alert_id = f"a-{uuid.uuid4().hex[:8]}"
+        self._alert_repo.insert(
+            alert_id=alert_id,
+            connection_id=0,
+            alert_type="network_expanded",
+            title="Network expanded",
+            message=f"{target_name} added as {conn_type}. {len(neighbors)} connected entities joined your network.",
+            entity_name=target_name,
+            target_entity_id=golden_record_id,
+        )
 
-            alert_id = f"a-{uuid.uuid4().hex[:8]}"
-            entity_name = payload.get("name") or "Entity"
+        logger.info(f"Added existing entity {golden_record_id} ({target_name}) as {conn_type} — "
+                     f"{len(neighbors)} neighbors pulled into network")
 
-            if decision == "NEW_ENTITY":
-                self._alert_repo.insert(
-                    alert_id=alert_id, connection_id=connection_id,
-                    alert_type="entity_created", title="New entity created",
-                    message=f"{entity_name} was added as a new entity in the knowledge graph.",
-                    entity_name=entity_name, target_entity_id=target_id, confidence=confidence,
-                )
-            elif decision == "MERGE":
-                self._alert_repo.insert(
-                    alert_id=alert_id, connection_id=connection_id,
-                    alert_type="entity_merged", title="Entity merged",
-                    message=f"{entity_name} was matched and merged into an existing entity ({int(confidence * 100)}% confidence).",
-                    entity_name=entity_name, target_entity_id=target_id, confidence=confidence,
-                )
-            elif decision == "REVIEW":
-                self._alert_repo.insert(
-                    alert_id=alert_id, connection_id=connection_id,
-                    alert_type="merge_review", title="Merge review required",
-                    message=f"{entity_name} has a potential match ({int(confidence * 100)}% confidence) that needs human review.",
-                    entity_name=entity_name, target_entity_id=target_id, confidence=confidence,
-                )
-
-            logger.info(
-                f"Entity agent resolved connection {connection_id}: "
-                f"decision={decision} confidence={confidence:.2f} target={target_id}"
-            )
-
-        except Exception:
-            logger.exception(f"Entity agent resolution failed for connection {connection_id}")
-            try:
-                self._repo.update_agent_status(connection_id, "failed")
-            except Exception:
-                logger.exception("Failed to update agent_status to 'failed'")
+        return {
+            "added_entity_id": golden_record_id,
+            "added_entity_name": target_name,
+            "conn_type": conn_type,
+            "neighbor_count": len(neighbors),
+            "entities": entities,
+            "relationships": relationships,
+        }

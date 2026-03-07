@@ -41,6 +41,7 @@ public class PaimonSink implements ResolvedEntitySink {
         try {
             Options options = new Options();
             options.set("warehouse", config.warehousePath);
+            options.set("commit.force-create-snapshot", "true");
             CatalogContext ctx = CatalogContext.create(options);
             Catalog catalog = CatalogFactory.createCatalog(ctx);
 

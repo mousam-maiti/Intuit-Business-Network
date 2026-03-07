@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network, Share2 } from 'lucide-react';
+import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network, Share2, UserPlus } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
@@ -341,7 +341,8 @@ function EntityEditMode({ globalEntity, nativeOverride, onSave, onCancel }) {
 
 function EntityViewMode({
   globalEntity, nativeOverride, entity, onOpenAI, onEdit, onMerge,
-  onSelectEntity, onTraceSupplyChain, onShowOnNetwork, vendorRels, clientRels, allEntities,
+  onSelectEntity, onTraceSupplyChain, onShowOnNetwork, onAddConnection, isInNetwork,
+  vendorRels, clientRels, allEntities,
 }) {
   const [showProfile, setShowProfile] = useState(false);
 
@@ -531,7 +532,14 @@ function EntityViewMode({
           style={{ backgroundColor: QB.greenLight, color: QB.greenDark }}>
           <Sparkles size={11} /> Ask Intuit Assist
         </button>
-        {onShowOnNetwork && (
+        {onAddConnection && !isInNetwork && (
+          <button onClick={() => onAddConnection(entity)}
+            className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 text-white transition-colors"
+            style={{ backgroundColor: QB.green }}>
+            <UserPlus size={11} /> Add to Network
+          </button>
+        )}
+        {onShowOnNetwork && isInNetwork && (
           <button onClick={() => onShowOnNetwork(entity)}
             className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-gray-50"
             style={{ borderColor: QB.cardBorder, color: QB.textSecondary }}>
@@ -614,6 +622,8 @@ export function EntityDetailPanel({
   onSelectEntity,
   onTraceSupplyChain,
   onShowOnNetwork,
+  onAddConnection,
+  isInNetwork = true,
   vendorRels = [],
   clientRels = [],
   allEntities = [],
@@ -653,6 +663,8 @@ export function EntityDetailPanel({
       onSelectEntity={onSelectEntity}
       onTraceSupplyChain={onTraceSupplyChain}
       onShowOnNetwork={onShowOnNetwork}
+      onAddConnection={onAddConnection}
+      isInNetwork={isInNetwork}
       vendorRels={vendorRels}
       clientRels={clientRels}
       allEntities={allEntities}
