@@ -38,10 +38,10 @@ QB Network Graph solves the problem of understanding business relationships at s
 | **View business network** | Interactive force-directed graph showing vendors (orange) and customers (blue) with hop-colored depth. Drag-to-pan, click to inspect entities |
 | **Search relationships** | Global search with Redis-cached results. Find any business and understand direct/indirect relationships across the network |
 | **Grow the network** | Add new vendor/client connections. The system resolves whether the business already exists under a different name or descriptor |
-| **Entity resolution** | AI-powered deduplication: deterministic rules, vector embeddings (Gemini), and LLM reasoning merge duplicate records with full audit trails |
+| **Entity resolution** | AI-powered deduplication: deterministic rules, vector embeddings, and LLM reasoning merge duplicate records with full audit trails |
 | **Match review** | Human-in-the-loop review queue for uncertain entity matches. Approve/reject with reasoning, triggering graph updates |
 | **Connection lineage** | Time-travel through entity history: view audit trails, before/after snapshots, and Paimon pipeline provenance |
-| **AI assistant** | Conversational interface (Intuit Assist) powered by Gemini 2.5 with 15 MCP tools for querying the network, traversing supply chains, detecting clusters, and assessing risk |
+| **AI assistant** | Conversational interface (Intuit Assist) with pluggable LLM provider and 23 MCP tools for querying the network, traversing supply chains, detecting clusters, and assessing risk |
 | **Infrastructure monitoring** | Grafana-themed dashboard showing real-time metrics for Redis, Neo4j, Paimon, Elasticsearch, Kibana, and OTEL Collector |
 
 ### AI Chat Capabilities
@@ -187,13 +187,16 @@ React 18 + Vite frontend with Tailwind CSS, Recharts, and Lucide icons. Features
 FastAPI backend serving 21 REST endpoints across entities, relationships, search, matching, connections, alerts, lineage, and infrastructure metrics. Queries Neo4j, MySQL, Paimon, and Redis.
 
 ### qb-network-graph-conv-agent
-Conversational AI agent using Gemini 2.5 with a ReAct reasoning loop. Supports WebSocket bidirectional chat, session persistence to MySQL, and 15 MCP tool integrations for network queries, analytics, and chart generation.
+Conversational AI agent with a ReAct reasoning loop. Supports WebSocket bidirectional chat, session persistence to MySQL, and 23 MCP tool integrations for network queries, analytics, and chart generation. LLM provider is pluggable via the shared `llm_providers` package (default: Gemini 2.5).
 
 ### qb-network-graph-entity-agent
-Entity resolution service with escalating comparison strategy: deterministic field matching, Gemini embedding similarity, then LLM-based reasoning. Writes golden records to MySQL and Neo4j with full audit trails.
+Entity resolution service with escalating comparison strategy: deterministic field matching, embedding similarity, then LLM-based reasoning. Writes golden records to MySQL and Neo4j with full audit trails. Both LLM and embedding providers are pluggable via the shared `llm_providers` package.
 
 ### qb-network-graph-mcp-servers
-Model Context Protocol server exposing 19 tools across candidate evaluation, knowledge graph queries, entity writing, and search/analytics. Also runs a sync HTTP API for Neo4j graph pushes.
+Model Context Protocol server exposing 23 tools across candidate evaluation, knowledge graph queries, entity writing, and search/analytics. Also runs a sync HTTP API for Neo4j graph pushes. Uses the shared `llm_providers` package for LLM and embedding calls.
+
+### qb-network-graph-llm-providers
+Shared Python package providing abstract `LLMProvider` and `EmbeddingProvider` interfaces with a factory pattern. Ships a Gemini implementation wrapping `google.generativeai`. Imported by the conv agent, entity agent, and MCP server via `sys.path` (no pip install required).
 
 ### qb-network-graph-classifier-orchestrator
 Java streaming application that reads `entity_connections` from Paimon, classifies each row through 5 classifiers (name, industry, commodity, location, behavioral), and POSTs classified personas to the Entity Agent.
@@ -219,7 +222,7 @@ Python data generator using Faker to create realistic QuickBooks seed data (comp
 |-------|-----------|
 | **Frontend** | React 18, Vite 5, Tailwind CSS 3, Recharts, Lucide, React Router 6 |
 | **Backend API** | Python, FastAPI, Uvicorn |
-| **AI/LLM** | Google Gemini 2.5 (chat + embeddings) |
+| **AI/LLM** | Pluggable provider abstraction (default: Google Gemini 2.5 for chat + embeddings) |
 | **Agent Protocol** | Model Context Protocol (MCP) via FastMCP |
 | **Graph Database** | Neo4j 5 |
 | **Relational DB** | MySQL 8.0 |
@@ -336,14 +339,14 @@ Each service reads from its own config file. Copy the example env files and fill
 |---------|-------------|--------------|
 | UI | `.env` | `VITE_PORT`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_USE_MOCKS` |
 | Backend | `be-config.yaml` | Neo4j, MySQL, Redis, Paimon connection details |
-| Conv Agent | `agent-config.yaml` | Gemini API key, MCP server URL, MySQL for sessions |
-| Entity Agent | `agent-config.yaml` | Gemini API key, MySQL, Neo4j endpoints |
-| MCP Server | `server-config.yaml` | Neo4j, Redis, MySQL, GraphDB, Gemini API key |
+| Conv Agent | `agent-config.yaml` | LLM provider/model, MCP server URL, MySQL for sessions |
+| Entity Agent | `agent-config.yaml` | LLM/embedding provider/model, MySQL, Neo4j endpoints |
+| MCP Server | `server-config.yaml` | Neo4j, Redis, MySQL, GraphDB, LLM/embedding provider |
 | CDC | `.env` | `FLINK_HOME`, MySQL source connection |
 | Stream Aggregator | `.env` | Flink REST URL, Paimon warehouse path |
 | Seed Generator | `.env` | MySQL connection, MCP sync API URL |
 
-**Required API key**: Set `GEMINI_API_KEY` in the conv agent, entity agent, and MCP server configs.
+**Required API key**: Set `GEMINI_API_KEY` (or the appropriate key for your configured LLM provider) in the conv agent, entity agent, and MCP server configs.
 
 ## Running the Platform
 
@@ -447,8 +450,8 @@ Entity Agent (escalating resolution: deterministic -> embeddings -> LLM)
 
 1. **Find candidates** &mdash; fuzzy name matching via RapidFuzz against existing golden records
 2. **Compare fields** &mdash; deterministic field-by-field comparison (name, address, industry)
-3. **Embedding similarity** &mdash; Gemini embedding cosine similarity for semantic matching
-4. **LLM reasoning** &mdash; Gemini evaluates ambiguous cases with structured reasoning
+3. **Embedding similarity** &mdash; cosine similarity on vector embeddings for semantic matching
+4. **LLM reasoning** &mdash; LLM evaluates ambiguous cases with structured reasoning
 5. **Decision** &mdash; AUTO_MERGE, AUTO_CREATE, or escalate to PENDING human review
 
 ### Audit & Provenance
