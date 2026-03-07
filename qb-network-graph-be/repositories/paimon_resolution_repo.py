@@ -191,6 +191,21 @@ class PaimonResolutionRepository(AbstractResolutionRepository):
                 # Sync full record to Neo4j so it appears in search/network
                 self._sync_golden_record_full(full_record)
 
+            # Create relationship between the owning company and the new entity
+            company_id = pr.get("company_id")
+            record_type = pr.get("record_type", "vendor")
+            if company_id and orphan_id:
+                rel_type = "SELLS_TO" if record_type == "customer" else "BUYS_FROM"
+                self._sync_relationship({
+                    "edge_id": f"REJ-{match_id}",
+                    "source_entity_id": str(company_id),
+                    "target_entity_id": orphan_id,
+                    "rel_type": rel_type,
+                    "transaction_volume": 0,
+                    "transaction_count": 0,
+                })
+                logger.info(f"Created {rel_type} relationship: {company_id} -> {orphan_id} (rejected match {match_id})")
+
         return {"matchId": match_id, "resolution": resolution, "resolvedAt": now_iso}
 
     def _execute_accepted_merge(self, match_id: str, now_ts: str, now_iso: str, candidate_override_id: str = None) -> dict:
@@ -271,6 +286,7 @@ class PaimonResolutionRepository(AbstractResolutionRepository):
         # Sync to Neo4j via MCP sync endpoints
         self._sync_golden_record({
             "golden_record_id": candidate_id,
+            "canonical_name": candidate_gr.get("canonical_name") or "",
             "name_variants": merged_variants,
             "source_records": merged_sources,
             "source_count": new_source_count,
@@ -281,6 +297,8 @@ class PaimonResolutionRepository(AbstractResolutionRepository):
             "status": "MERGED",
             "merged_into": candidate_id,
         })
+        # Transfer relationships from absorbed entity to survivor in Neo4j
+        self._sync_transfer_relationships(orphan_id, candidate_id)
         self._sync_audit({
             "audit_id": audit_id,
             "event_id": f"user-accept-{match_id}",
@@ -324,6 +342,23 @@ class PaimonResolutionRepository(AbstractResolutionRepository):
             httpx.post(f"{self._sync_url}/sync/golden-record", json=data, timeout=5.0)
         except Exception as e:
             logger.warning(f"Neo4j sync failed (non-fatal): {e}")
+
+    def _sync_relationship(self, data: dict):
+        try:
+            import httpx
+            httpx.post(f"{self._sync_url}/sync/relationship", json=data, timeout=5.0)
+        except Exception as e:
+            logger.warning(f"Neo4j relationship sync failed (non-fatal): {e}")
+
+    def _sync_transfer_relationships(self, absorbed_id: str, survivor_id: str):
+        try:
+            import httpx
+            httpx.post(f"{self._sync_url}/sync/transfer-relationships", json={
+                "absorbed_id": absorbed_id,
+                "survivor_id": survivor_id,
+            }, timeout=5.0)
+        except Exception as e:
+            logger.warning(f"Neo4j relationship transfer failed (non-fatal): {e}")
 
     def _sync_audit(self, data: dict):
         try:

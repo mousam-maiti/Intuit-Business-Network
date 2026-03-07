@@ -341,8 +341,10 @@ export function AIChatMessages({ msgs, typing, tools, onSetInput, suggestions, c
           <div className="px-4 py-3 rounded-lg bg-white border space-y-1.5" style={{ borderColor: QB.cardBorder }}>
             {tools.map((t, i) => (
               <div key={i} className="flex items-center gap-2 text-xs" style={{ color: QB.textSecondary }}>
-                <Check size={10} style={{ color: QB.green }} />
-                <span className="font-mono text-[10px]" style={{ color: QB.textMuted }}>{t.name}</span>
+                {t.status === 'running'
+                  ? <span className="w-2.5 h-2.5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: QB.green, borderTopColor: 'transparent' }} />
+                  : <Check size={10} style={{ color: QB.green }} />
+                }
                 {t.label}
               </div>
             ))}

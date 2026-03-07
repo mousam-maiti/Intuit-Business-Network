@@ -14,7 +14,14 @@ export function AIPanel({ open, onClose, chat, onGoFullPage }) {
             <Sparkles size={14} style={{ color: QB.green }} />
           </div>
           <div>
-            <div className="text-sm font-medium" style={{ color: QB.textPrimary }}>Intuit Assist</div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm font-medium" style={{ color: QB.textPrimary }}>Intuit Assist</span>
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: chat.connected ? QB.green : QB.red }}
+                title={chat.connected ? 'Connected' : 'Disconnected'}
+              />
+            </div>
             <div className="text-[10px]" style={{ color: QB.textMuted }}>Network intelligence</div>
           </div>
         </div>

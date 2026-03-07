@@ -9,6 +9,7 @@ const SearchPage = lazy(() => import('@/components/pages/Search/SearchPage'));
 const ReviewPage = lazy(() => import('@/components/pages/Review/ReviewPage'));
 const AssistPage = lazy(() => import('@/components/pages/Assist/AssistPage'));
 const LineagePage = lazy(() => import('@/components/pages/Lineage/LineagePage'));
+const InfraMonitorPage = lazy(() => import('@/components/pages/InfraMonitor/InfraMonitorPage'));
 
 function LazyWrap({ children }) {
   return (
@@ -25,7 +26,7 @@ function DashboardWrapper() {
 }
 
 function NetworkWrapper() {
-  const { selectedEntity, setSelectedEntity, goTo, networkEntities, networkRelationships } = useOutletContext();
+  const { selectedEntity, setSelectedEntity, goTo, networkEntities, networkRelationships, refreshNetwork } = useOutletContext();
   return (
     <LazyWrap>
       <NetworkPage
@@ -34,6 +35,7 @@ function NetworkWrapper() {
         onOpenAI={() => goTo('assist', selectedEntity)}
         networkEntities={networkEntities}
         networkRelationships={networkRelationships}
+        refreshNetwork={refreshNetwork}
       />
     </LazyWrap>
   );
@@ -58,6 +60,10 @@ function AssistWrapper() {
   return <LazyWrap><AssistPage chat={chat} onResetEntity={setSelectedEntity} /></LazyWrap>;
 }
 
+function InfraMonitorWrapper() {
+  return <LazyWrap><InfraMonitorPage /></LazyWrap>;
+}
+
 export const router = createBrowserRouter([
   {
     path: '/',
@@ -69,6 +75,7 @@ export const router = createBrowserRouter([
       { path: 'review',     element: <ReviewWrapper /> },
       { path: 'lineage',    element: <LineageWrapper /> },
       { path: 'assist',     element: <AssistWrapper /> },
+      { path: 'infra',      element: <InfraMonitorWrapper /> },
     ],
   },
 ]);

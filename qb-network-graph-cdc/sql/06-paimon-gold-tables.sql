@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS pending_resolution (
     key_uncertainty      STRING,
     trigger_type         STRING,           -- AI_AGENT | RE_EVALUATION | HUMAN
     status               STRING,           -- PENDING | MERGED | REJECTED
+    company_id           STRING,           -- QB company that owns the source record
+    record_type          STRING,           -- vendor | customer
     reviewer             STRING,
     reviewed_at          TIMESTAMP(3),
     created_at           TIMESTAMP(3),

@@ -116,6 +116,21 @@ class SyncService:
             logger.error(f"Failed to sync audit {audit_id}: {e}")
             return {"success": False, "error": str(e)}
 
+    async def transfer_relationships(self, absorbed_id: str, survivor_id: str) -> dict:
+        """Transfer all relationships from absorbed entity to survivor after a merge.
+
+        Re-points edges from absorbed → survivor, then marks absorbed as MERGED.
+        """
+        try:
+            self._rel_repo.merge_entities(survivor_id, absorbed_id)
+            await self._cache.invalidate_entity(absorbed_id)
+            await self._cache.invalidate_entity(survivor_id)
+            logger.info(f"Transferred relationships from {absorbed_id} to {survivor_id}")
+            return {"success": True, "absorbed_id": absorbed_id, "survivor_id": survivor_id}
+        except Exception as e:
+            logger.error(f"Failed to transfer relationships {absorbed_id} → {survivor_id}: {e}")
+            return {"success": False, "error": str(e)}
+
     async def backfill_embeddings(self) -> dict:
         """Backfill embeddings for all entities that lack them."""
         if not self._embedding:

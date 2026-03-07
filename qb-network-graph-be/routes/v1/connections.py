@@ -1,8 +1,8 @@
-"""Connection routes: GET /connections/auto, GET /connections/manual, POST /connections, POST /connections/add-network."""
+"""Connection routes: GET /connections/auto, GET /connections/manual, POST /connections, POST /connections/add-network, POST /connections/remove."""
 from fastapi import APIRouter, Depends
 
 from dependencies import get_connection_service
-from models.api import AddConnectionRequest, AddExistingConnectionRequest
+from models.api import AddConnectionRequest, AddExistingConnectionRequest, RemoveConnectionRequest
 from services.connection_service import ConnectionService
 
 router = APIRouter()
@@ -37,4 +37,13 @@ async def add_existing_connection(
         golden_record_id=body.goldenRecordId,
         conn_type=body.connType,
     )
+    return {"data": result}
+
+
+@router.post("/connections/remove")
+async def remove_connection(
+    body: RemoveConnectionRequest,
+    svc: ConnectionService = Depends(get_connection_service),
+):
+    result = svc.remove_connection(entity_id=body.entityId)
     return {"data": result}

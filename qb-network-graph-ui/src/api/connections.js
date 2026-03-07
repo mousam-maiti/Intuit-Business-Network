@@ -15,3 +15,7 @@ export async function addConnection(payload) {
 export async function addExistingConnection(goldenRecordId, connType) {
   return apiClient.post('/connections/add-network', { goldenRecordId, connType });
 }
+
+export async function removeConnection(entityId) {
+  return apiClient.post('/connections/remove', { entityId });
+}

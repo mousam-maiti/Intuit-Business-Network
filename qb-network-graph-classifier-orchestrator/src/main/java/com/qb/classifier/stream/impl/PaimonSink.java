@@ -220,6 +220,8 @@ public class PaimonSink implements ResolvedEntitySink {
                 str(pr, "key_uncertainty"),
                 str(pr, "trigger_type"),
                 BinaryString.fromString("PENDING"),
+                str(pr, "company_id"),    // QB company that owns the source record
+                str(pr, "record_type"),   // vendor | customer
                 null,   // reviewer
                 null,   // reviewed_at
                 Timestamp.now()

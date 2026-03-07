@@ -132,6 +132,10 @@ class AddExistingConnectionRequest(BaseModel):
     connType: str  # "vendor" | "client"
 
 
+class RemoveConnectionRequest(BaseModel):
+    entityId: str  # golden record ID to disconnect
+
+
 # ── Native overrides ────────────────────────────────────
 
 class NativeOverrideUpdate(BaseModel):

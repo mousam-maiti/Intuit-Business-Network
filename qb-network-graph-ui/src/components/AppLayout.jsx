@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Search, Home, Globe, ClipboardCheck, Sparkles,
-  Menu, Building2, History,
+  Menu, Building2, History, Activity,
 } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { ROUTES, viewToPath } from '@/config/routes';
@@ -22,6 +22,7 @@ const SIDEBAR_ICONS = {
   review: <ClipboardCheck size={18} />,
   lineage: <History size={18} />,
   assist: <Sparkles size={18} />,
+  infra: <Activity size={18} />,
 };
 
 export default function AppLayout() {
@@ -147,7 +148,7 @@ export default function AppLayout() {
           <div className="w-9 h-9 rounded-full flex items-center justify-center mb-3 overflow-hidden">
             <img src="/logo.png" alt="Logo" className="w-full h-full object-cover" />
           </div>
-          {ROUTES.map((route) => (
+          {ROUTES.filter(r => !r.bottom).map((route) => (
             <button
               key={route.id}
               onClick={() => goTo(route.id)}
@@ -166,18 +167,43 @@ export default function AppLayout() {
               )}
             </button>
           ))}
+          <div className="flex-1" />
+          {ROUTES.filter(r => r.bottom).map((route) => (
+            <button
+              key={route.id}
+              onClick={() => goTo(route.id)}
+              className="relative w-10 h-10 rounded flex items-center justify-center transition-colors"
+              style={{
+                backgroundColor: activeId === route.id ? QB.sidebarActive : 'transparent',
+                color: activeId === route.id ? 'white' : '#8B949E',
+              }}
+              title={route.label}
+            >
+              {SIDEBAR_ICONS[route.id]}
+            </button>
+          ))}
         </div>
 
         {/* Secondary text panel */}
         <div className={`sidebar-panel flex flex-col${sidebarCollapsed ? ' collapsed' : ''}`}>
           <div className="text-xs font-semibold px-2 py-1.5 mb-1" style={{ color: QB.green }}>Business network</div>
-          {ROUTES.map((route) => (
+          {ROUTES.filter(r => !r.bottom).map((route) => (
             <button
               key={route.id}
               onClick={() => goTo(route.id)}
               className={'sidebar-item' + (activeId === route.id ? ' active' : '')}
             >
               {route.id === 'assist' && <Sparkles size={12} />}
+              {route.label}
+            </button>
+          ))}
+          <div className="flex-1" />
+          {ROUTES.filter(r => r.bottom).map((route) => (
+            <button
+              key={route.id}
+              onClick={() => goTo(route.id)}
+              className={'sidebar-item' + (activeId === route.id ? ' active' : '')}
+            >
               {route.label}
             </button>
           ))}

@@ -188,9 +188,16 @@ class Neo4jClient:
                     return [val] if val else []
             return val if isinstance(val, list) else []
 
+        # Resolve canonical_name: prefer explicit field, fall back to first name variant
+        canonical_name = gr.get("canonical_name") or ""
+        if not canonical_name:
+            variants = _list_val(gr.get("name_variants", []))
+            if variants:
+                canonical_name = variants[0]
+
         return {
             "id": gr.get("golden_record_id", ""),
-            "canonical_name": gr.get("canonical_name", ""),
+            "canonical_name": canonical_name,
             "entity_type": gr.get("entity_type", "PHANTOM"),
             "status": gr.get("status", "ACTIVE"),
             "confidence": float(gr.get("confidence", 0.5)),

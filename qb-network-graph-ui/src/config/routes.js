@@ -9,6 +9,7 @@ export const ROUTES = [
   { path: '/review',     id: 'review',    label: 'Match review' },
   { path: '/lineage',    id: 'lineage',   label: 'Connection lineage' },
   { path: '/assist',     id: 'assist',    label: 'Intuit Assist' },
+  { path: '/infra',      id: 'infra',     label: 'Infra monitor', bottom: true },
 ];
 
 /** Map view id → path for programmatic navigation */

@@ -48,6 +48,7 @@ from routes.v1.search import router as search_router
 from routes.v1.matching import router as matching_router
 from routes.v1.connections import router as connections_router
 from routes.v1.native import router as native_router
+from routes.v1.infra import router as infra_router
 from routes.v1.alerts import router as alerts_router
 from routes.v1.lineage import router as lineage_router
 
@@ -187,6 +188,10 @@ async def lifespan(app: FastAPI):
         timeout=cfg.entity_agent.timeout,
     )
     app.state.cfg = cfg
+    app.state.neo4j_driver = neo4j_driver
+    app.state.redis_client = redis_client
+    app.state.paimon_client = paimon_client
+    app.state.mysql_pool = mysql_pool
 
     logger.info(
         f"QB Network Graph BE started  "
@@ -253,6 +258,7 @@ api.include_router(connections_router)
 api.include_router(native_router)
 api.include_router(alerts_router)
 api.include_router(lineage_router)
+api.include_router(infra_router)
 
 app.include_router(api)
 

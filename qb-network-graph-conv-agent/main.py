@@ -233,11 +233,11 @@ async def websocket_chat(ws: WebSocket, session_id: str, user_id: str = Query(de
                         progress_callback=on_progress,
                     )
 
-                    # Save assistant response
+                    # Save assistant response with full rich payload for history restore
+                    rich_payload = response.model_dump(exclude_none=True, exclude={"type", "content"})
                     _session_mgr.save_assistant_message(
                         session_id, response.content,
-                        metadata={"has_chart": response.chart is not None,
-                                  "has_table": response.table is not None},
+                        metadata=rich_payload if rich_payload else None,
                     )
 
                     # Send response

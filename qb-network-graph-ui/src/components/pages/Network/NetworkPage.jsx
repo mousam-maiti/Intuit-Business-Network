@@ -6,9 +6,11 @@ import { findPath, getRelType } from '@/utils/graph';
 import { getMonthlyVolume, getSupplyChain } from '@/api/relationships';
 import { getNativeOverrides, getNativeMerges } from '@/api/native';
 import { saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
+import { removeConnection } from '@/api/connections';
+import { config } from '@/config/env';
 import { Widget, EntityDetailPanel, MergeFlowModal, AddConnectionModal } from '@/components/shared';
 import { NetworkGraph } from './components/NetworkGraph';
-export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networkEntities, networkRelationships }) {
+export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networkEntities, networkRelationships, refreshNetwork }) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [edgeFilter, setEdgeFilter] = useState('all');
   const [pathMode, setPathMode] = useState(false);
@@ -67,6 +69,13 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networ
   const handleUndoMerge = useCallback(async (mergeId) => {
     await undoNativeMerge(mergeId);
   }, []);
+
+  const handleRemoveConnection = useCallback(async (entity) => {
+    await removeConnection(entity.id);
+    if (refreshNetwork) await refreshNetwork();
+  }, [refreshNetwork]);
+
+  const userEntityId = config.currentEntityId;
 
   const handlePathSelect = useCallback((id) => {
     if (!pathStart) {
@@ -191,6 +200,8 @@ export default function NetworkPage({ selectedEntity, onSelect, onOpenAI, networ
               onSaveNative={handleSaveNative}
               onOpenAI={onOpenAI}
               onMerge={() => setMergeSource(selectedEntity)}
+              onRemoveConnection={handleRemoveConnection}
+              isDirectConnection={!!networkRelationships.find((r) => (r.source === userEntityId && r.target === selectedEntity.id) || (r.target === userEntityId && r.source === selectedEntity.id))}
               onSelectEntity={onSelect}
               onTraceSupplyChain={(entity) => handleTraceSupplyChain(entity.id, supplyChainDir)}
               vendorRels={vendorRels}

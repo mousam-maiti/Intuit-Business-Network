@@ -489,6 +489,14 @@ echo "$!" >> "$PIDS_FILE"
 deactivate 2>/dev/null || true
 cd "$ROOT"
 wait_for_port 8083 "MCP Server" 30 || fail "MCP Server did not start"
+wait_for_port 8084 "MCP Sync API" 15 || fail "MCP Sync API did not start"
+
+# Seed global business network → Neo4j (via MCP sync API on :8084)
+info "Seeding global business network (~1000 businesses + edges)..."
+cd "$ROOT/qb-seed-generator"
+venv/bin/python -m src.main network
+cd "$ROOT"
+ok "Global business network seeded"
 
 # Entity Agent (port 8085) — must be up before Classifier
 info "Starting Entity Agent on :8085..."

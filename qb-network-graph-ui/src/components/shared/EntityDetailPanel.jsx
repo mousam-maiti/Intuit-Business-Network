@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network, Share2, UserPlus } from 'lucide-react';
+import { Building2, Sparkles, Pencil, GitMerge, Tag, StickyNote, RotateCcw, X, Plus, Check, Network, Share2, UserPlus, Unlink } from 'lucide-react';
 import { QB } from '@/constants/colors';
 import { getIndustry } from '@/constants/industries';
 import { fmt } from '@/utils/format';
@@ -341,7 +341,7 @@ function EntityEditMode({ globalEntity, nativeOverride, onSave, onCancel }) {
 
 function EntityViewMode({
   globalEntity, nativeOverride, entity, onOpenAI, onEdit, onMerge,
-  onSelectEntity, onTraceSupplyChain, onShowOnNetwork, onAddConnection, isInNetwork,
+  onSelectEntity, onTraceSupplyChain, onShowOnNetwork, onAddConnection, onRemoveConnection, isInNetwork, isDirectConnection,
   vendorRels, clientRels, allEntities,
 }) {
   const [showProfile, setShowProfile] = useState(false);
@@ -546,6 +546,13 @@ function EntityViewMode({
             <Share2 size={11} /> Show on Network
           </button>
         )}
+        {onRemoveConnection && isInNetwork && (
+          <button onClick={() => onRemoveConnection(entity)}
+            className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-red-50"
+            style={{ borderColor: '#FECACA', color: '#DC2626' }}>
+            <Unlink size={11} /> Remove Connection
+          </button>
+        )}
         {onTraceSupplyChain && (
           <button onClick={() => onTraceSupplyChain(entity)}
             className="w-full text-xs py-2 rounded flex items-center justify-center gap-1.5 mt-1 border transition-colors hover:bg-gray-50"
@@ -623,7 +630,9 @@ export function EntityDetailPanel({
   onTraceSupplyChain,
   onShowOnNetwork,
   onAddConnection,
+  onRemoveConnection,
   isInNetwork = true,
+  isDirectConnection = false,
   vendorRels = [],
   clientRels = [],
   allEntities = [],
@@ -664,7 +673,9 @@ export function EntityDetailPanel({
       onTraceSupplyChain={onTraceSupplyChain}
       onShowOnNetwork={onShowOnNetwork}
       onAddConnection={onAddConnection}
+      onRemoveConnection={onRemoveConnection}
       isInNetwork={isInNetwork}
+      isDirectConnection={isDirectConnection}
       vendorRels={vendorRels}
       clientRels={clientRels}
       allEntities={allEntities}

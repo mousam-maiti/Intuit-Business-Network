@@ -72,6 +72,19 @@ async def sync_pending_resolution(request: Request):
     return JSONResponse(content=result, status_code=status)
 
 
+@router.post("/transfer-relationships")
+async def transfer_relationships(request: Request):
+    """Transfer all relationships from an absorbed entity to the survivor after a merge."""
+    body = await request.json()
+    sync_service = request.app.state.sync_service
+    result = await sync_service.transfer_relationships(
+        absorbed_id=body["absorbed_id"],
+        survivor_id=body["survivor_id"],
+    )
+    status = 200 if result.get("success") else 500
+    return JSONResponse(content=result, status_code=status)
+
+
 @router.post("/backfill-relationship-volumes")
 async def backfill_relationship_volumes(request: Request):
     """Backfill relationship edge volumes from entity behavioral data.

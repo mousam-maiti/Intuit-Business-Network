@@ -1,8 +1,11 @@
-"""Seed 1: Intuit Business Network — 100 global businesses with relationships.
+"""Seed 1: Intuit Business Network — ~1200 global businesses with relationships.
 
-Generates golden records and inter-business relationships across diverse
-industry clusters, then POSTs them to the MCP sync API (port 8084) which
-writes to Neo4j. Also writes a JSON manifest for reproducibility.
+Generates golden records and inter-business relationships across 12 industry
+clusters in 15 metros, then POSTs them to the MCP sync API (port 8084) which
+writes to Neo4j.
+
+Uses Faker for realistic business details. Includes mega-hub entities
+(wholesaler, bank, cloud provider) that connect to many businesses.
 
 Usage:  python -m src.main network
 """
@@ -10,423 +13,600 @@ Usage:  python -m src.main network
 import hashlib
 import json
 import random
-import time
 from pathlib import Path
 
 import requests
+from faker import Faker
 
 from src.config import cfg
-from src.reference_data import (
-    FIRST_NAMES, LAST_NAMES, STREET_NAMES, SUITE_TYPES, ZIP_CODES,
-    BUSINESS_SUFFIXES, PAYMENT_TERMS,
-)
 
-# ── Sync API base URL ──
+fake = Faker()
+Faker.seed(cfg.RANDOM_SEED + 1000)
+
 SYNC_BASE_URL = "http://localhost:8084"
 
-# ── Industry clusters for the global network ──
-# (cluster_name, businesses_list)
-# Each business: (name, naics, category, commodities, city, state)
+# ═══════════════════════════════════════════════════════════════
+#  METROS & GEOGRAPHY
+# ═══════════════════════════════════════════════════════════════
 
-NETWORK_CLUSTERS = {
+METROS = {
+    # city: (state, area_code, zips, weight)
+    # weight controls how many businesses spawn here
+    "Austin":        ("TX", "512", ["78701","78702","78703","78704","78745","78748","78749","78750","78751","78753","78756","78758","78759"], 12),
+    "Houston":       ("TX", "713", ["77001","77002","77003","77008","77019","77027","77030","77056"], 8),
+    "Dallas":        ("TX", "214", ["75201","75202","75204","75207","75219","75226","75235"], 7),
+    "San Antonio":   ("TX", "210", ["78201","78205","78207","78215","78230","78240","78249"], 6),
+    "Round Rock":    ("TX", "512", ["78664","78665","78681"], 3),
+    "Cedar Park":    ("TX", "512", ["78613"], 2),
+    "Denver":        ("CO", "303", ["80202","80204","80205","80206","80210","80211","80216"], 5),
+    "Phoenix":       ("AZ", "602", ["85001","85003","85004","85006","85008","85012","85016"], 5),
+    "Los Angeles":   ("CA", "213", ["90001","90012","90015","90017","90024","90028","90036"], 5),
+    "San Francisco": ("CA", "415", ["94102","94103","94105","94107","94110","94111","94114"], 4),
+    "Chicago":       ("IL", "312", ["60601","60602","60604","60607","60610","60614","60616"], 4),
+    "Atlanta":       ("GA", "404", ["30301","30303","30305","30308","30309","30312","30313"], 4),
+    "Miami":         ("FL", "305", ["33101","33125","33127","33130","33132","33136","33139"], 4),
+    "Seattle":       ("WA", "206", ["98101","98102","98103","98104","98105","98109","98112"], 3),
+    "Nashville":     ("TN", "615", ["37201","37203","37206","37208","37210","37211","37212"], 3),
+    "Portland":      ("OR", "503", ["97201","97202","97204","97205","97209","97210","97214"], 2),
+    "New York":      ("NY", "212", ["10001","10003","10005","10007","10010","10012","10016"], 3),
+    "Georgetown":    ("TX", "512", ["78626","78628"], 2),
+    "Kyle":          ("TX", "512", ["78640"], 1),
+    "San Marcos":    ("TX", "512", ["78666"], 1),
+    "Dripping Springs": ("TX", "512", ["78620"], 1),
+    "Pflugerville":  ("TX", "512", ["78660"], 1),
+}
+
+def _pick_city():
+    """Weighted random city selection."""
+    cities = list(METROS.keys())
+    weights = [METROS[c][3] for c in cities]
+    return random.choices(cities, weights=weights, k=1)[0]
+
+
+# ═══════════════════════════════════════════════════════════════
+#  INDUSTRY CLUSTER DEFINITIONS
+# ═══════════════════════════════════════════════════════════════
+
+# Each cluster: (name, naics_sector, templates)
+# template: (name_pattern, naics_code, category, commodities)
+# name_pattern uses {city}, {loc}, {last} as placeholders
+
+CLUSTERS = {
     "Food & Beverage": {
         "naics_sector": "31",
-        "naics_subsector": "311",
-        "businesses": [
-            ("Hill Country Farms", "111998", "Agriculture", ["organic produce", "vegetables", "herbs"], "Dripping Springs", "TX"),
-            ("Lone Star Dairy Co", "112120", "Dairy Production", ["milk", "cheese", "butter"], "Georgetown", "TX"),
-            ("Capital City Bakery", "311811", "Bakery", ["bread", "pastries", "cakes"], "Austin", "TX"),
-            ("Tex Mex Distributors", "424410", "Food Distribution", ["tortillas", "salsas", "spices"], "San Antonio", "TX"),
-            ("BBQ Pit Supply Co", "423440", "Restaurant Supply", ["smokers", "charcoal", "seasoning"], "Austin", "TX"),
-            ("Austin Craft Beverages", "312120", "Beverage Manufacturing", ["craft beer", "kombucha", "cold brew"], "Austin", "TX"),
-            ("Fresh Catch Seafood", "424460", "Seafood Distribution", ["shrimp", "fish", "oysters"], "Houston", "TX"),
-            ("Rio Grande Coffee Roasters", "311920", "Coffee Roasting", ["coffee beans", "espresso", "cold brew"], "Austin", "TX"),
-            ("Sunrise Catering Co", "722320", "Catering", ["event catering", "corporate lunch", "buffet"], "Round Rock", "TX"),
-            ("Guadalupe Meat Market", "424470", "Meat Distribution", ["beef", "pork", "poultry"], "San Marcos", "TX"),
-            ("Pecan Street Wines", "312130", "Wine Distribution", ["wine", "spirits", "craft cocktails"], "Austin", "TX"),
-            ("South Congress Cafe Supply", "424410", "Cafe Supply", ["cups", "napkins", "to-go containers"], "Austin", "TX"),
-            ("Good Earth Organics", "111419", "Organic Farming", ["organic greens", "microgreens", "sprouts"], "Pflugerville", "TX"),
-            ("Bluebonnet Ice Cream", "311520", "Ice Cream Manufacturing", ["ice cream", "gelato", "sorbet"], "Cedar Park", "TX"),
-            ("Lone Star Food Trucks", "722330", "Mobile Food", ["food truck rental", "mobile kitchen", "event food"], "Austin", "TX"),
-            ("Brazos Valley Honey", "112910", "Apiary", ["raw honey", "beeswax", "honeycomb"], "Georgetown", "TX"),
+        "count": 100,
+        "templates": [
+            ("{loc} Farms",              "111998", "Agriculture",        ["organic produce","vegetables","herbs","fruit"]),
+            ("{loc} Dairy Co",           "112120", "Dairy Production",   ["milk","cheese","butter","yogurt"]),
+            ("{last} Bakery",            "311811", "Bakery",             ["bread","pastries","cakes","cookies"]),
+            ("{loc} Distributors",       "424410", "Food Distribution",  ["tortillas","salsas","spices","canned goods"]),
+            ("{loc} Restaurant Supply",  "423440", "Restaurant Supply",  ["smokers","charcoal","cookware","utensils"]),
+            ("{loc} Beverages",          "312120", "Beverage Mfg",       ["craft beer","kombucha","cold brew","soda"]),
+            ("{loc} Seafood",            "424460", "Seafood",            ["shrimp","fish","oysters","crab"]),
+            ("{last} Coffee Roasters",   "311920", "Coffee",             ["coffee beans","espresso","cold brew","tea"]),
+            ("{loc} Catering",           "722320", "Catering",           ["event catering","corporate lunch","buffet"]),
+            ("{loc} Meat Market",        "424470", "Meat Distribution",  ["beef","pork","poultry","sausage"]),
+            ("{loc} Wines & Spirits",    "312130", "Wine Distribution",  ["wine","spirits","craft cocktails"]),
+            ("{last} Ice Cream Co",      "311520", "Ice Cream",          ["ice cream","gelato","sorbet","frozen yogurt"]),
+            ("{loc} Food Trucks",        "722330", "Mobile Food",        ["food truck rental","mobile kitchen","event food"]),
+            ("{loc} Organics",           "111419", "Organic Farming",    ["organic greens","microgreens","sprouts"]),
         ],
     },
     "Technology & SaaS": {
-        "naics_sector": "51",
-        "naics_subsector": "511",
-        "businesses": [
-            ("CloudPeak Solutions", "541511", "Software Development", ["cloud hosting", "SaaS platform", "API services"], "Austin", "TX"),
-            ("DataBridge Analytics", "541512", "Data Analytics", ["business intelligence", "data warehousing", "dashboards"], "Austin", "TX"),
-            ("CyberShield Security", "541512", "Cybersecurity", ["penetration testing", "firewall management", "compliance"], "Dallas", "TX"),
-            ("Pixel Perfect Design", "541430", "UX Design", ["web design", "mobile apps", "branding"], "Austin", "TX"),
-            ("Circuit Board Labs", "334418", "Electronics Manufacturing", ["PCB assembly", "prototyping", "IoT devices"], "Round Rock", "TX"),
-            ("NetWave Communications", "517311", "Telecom", ["fiber internet", "VoIP", "network cabling"], "Austin", "TX"),
-            ("Alamo IT Staffing", "561311", "IT Staffing", ["contract developers", "DevOps engineers", "QA analysts"], "San Antonio", "TX"),
-            ("StackForge Consulting", "541611", "IT Consulting", ["cloud migration", "system architecture", "DevOps"], "Austin", "TX"),
-            ("TrueNode Hosting", "518210", "Cloud Hosting", ["managed hosting", "CDN", "SSL certificates"], "Dallas", "TX"),
-            ("Barton Creek Software", "541511", "Custom Software", ["ERP systems", "CRM platforms", "workflow automation"], "Austin", "TX"),
-            ("MapPoint GIS Services", "541370", "GIS & Mapping", ["geospatial analysis", "drone mapping", "survey data"], "Cedar Park", "TX"),
-            ("Quantum Edge AI", "541715", "AI & Machine Learning", ["NLP models", "computer vision", "predictive analytics"], "Austin", "TX"),
-            ("LoneStar Payments", "522320", "Payment Processing", ["credit card processing", "POS systems", "invoicing"], "Houston", "TX"),
-            ("RocketLaunch Marketing", "541810", "Digital Marketing", ["SEO", "PPC campaigns", "social media"], "Austin", "TX"),
-            ("ByteSmith DevTools", "511210", "Developer Tools", ["IDE plugins", "CI/CD pipelines", "code review"], "Austin", "TX"),
+        "naics_sector": "54",
+        "count": 100,
+        "templates": [
+            ("{loc} Software",           "541511", "Software Dev",       ["SaaS platform","API services","web apps"]),
+            ("{loc} Analytics",          "541512", "Data Analytics",     ["business intelligence","dashboards","data warehousing"]),
+            ("{loc} Cybersecurity",      "541512", "Cybersecurity",      ["penetration testing","firewall mgmt","compliance"]),
+            ("{last} Design Studio",     "541430", "UX Design",          ["web design","mobile apps","branding"]),
+            ("{loc} IT Staffing",        "561311", "IT Staffing",        ["contract developers","DevOps engineers","QA"]),
+            ("{last} Consulting",        "541611", "IT Consulting",      ["cloud migration","system architecture","DevOps"]),
+            ("{loc} Cloud Hosting",      "518210", "Cloud Hosting",      ["managed hosting","CDN","SSL certificates"]),
+            ("{loc} AI Labs",            "541715", "AI & ML",            ["NLP models","computer vision","predictive analytics"]),
+            ("{loc} Payments",           "522320", "Payment Processing", ["credit card processing","POS systems","invoicing"]),
+            ("{last} Marketing Digital", "541810", "Digital Marketing",  ["SEO","PPC campaigns","social media"]),
+            ("{loc} DevTools",           "511210", "Developer Tools",    ["IDE plugins","CI/CD pipelines","code review"]),
+            ("{loc} IoT Systems",        "334418", "Electronics Mfg",    ["PCB assembly","IoT devices","prototyping"]),
         ],
     },
     "Healthcare & Medical": {
         "naics_sector": "62",
-        "naics_subsector": "621",
-        "businesses": [
-            ("Austin Family Practice", "621111", "Primary Care", ["annual checkups", "vaccinations", "lab work"], "Austin", "TX"),
-            ("Lakeway Dental Group", "621210", "Dental", ["cleanings", "fillings", "orthodontics"], "Lakeway", "TX"),
-            ("Hill Country Veterinary", "541940", "Veterinary", ["pet wellness", "surgery", "vaccinations"], "Dripping Springs", "TX"),
-            ("MedSupply Direct", "423450", "Medical Supply", ["gloves", "syringes", "surgical instruments"], "Houston", "TX"),
-            ("BioLab Diagnostics", "621511", "Medical Lab", ["blood tests", "pathology", "urinalysis"], "Austin", "TX"),
-            ("PharmaCare Compounding", "446110", "Pharmacy", ["prescriptions", "compounding", "OTC medication"], "Round Rock", "TX"),
-            ("ClearView Optometry", "621320", "Optometry", ["eye exams", "contacts", "glasses"], "Cedar Park", "TX"),
-            ("Lone Star Physical Therapy", "621340", "Physical Therapy", ["rehab", "sports therapy", "mobility training"], "Austin", "TX"),
-            ("Capital Radiology Group", "621512", "Radiology", ["X-rays", "MRI", "CT scans"], "Austin", "TX"),
-            ("Premier Home Health", "621610", "Home Health", ["nursing care", "elder care", "post-surgery care"], "Georgetown", "TX"),
-            ("Texas Ortho Partners", "621111", "Orthopedics", ["joint replacement", "sports medicine", "fracture care"], "Austin", "TX"),
-            ("Bright Smile Pediatric Dental", "621210", "Pediatric Dental", ["children's cleanings", "sealants", "fluoride"], "Pflugerville", "TX"),
-            ("Alamo Chiropractic", "621310", "Chiropractic", ["spinal adjustment", "sports rehab", "wellness"], "San Antonio", "TX"),
-            ("LifeLine Ambulance", "621910", "Ambulance Services", ["emergency transport", "non-emergency transfer", "event standby"], "Austin", "TX"),
+        "count": 100,
+        "templates": [
+            ("{loc} Family Practice",    "621111", "Primary Care",       ["annual checkups","vaccinations","lab work"]),
+            ("{loc} Dental Group",       "621210", "Dental",             ["cleanings","fillings","orthodontics"]),
+            ("{loc} Veterinary",         "541940", "Veterinary",         ["pet wellness","surgery","vaccinations"]),
+            ("{loc} Medical Supply",     "423450", "Medical Supply",     ["gloves","syringes","surgical instruments"]),
+            ("{loc} Diagnostics Lab",    "621511", "Medical Lab",        ["blood tests","pathology","urinalysis"]),
+            ("{last} Pharmacy",          "446110", "Pharmacy",           ["prescriptions","compounding","OTC medication"]),
+            ("{loc} Optometry",          "621320", "Optometry",          ["eye exams","contacts","glasses"]),
+            ("{loc} Physical Therapy",   "621340", "Physical Therapy",   ["rehab","sports therapy","mobility training"]),
+            ("{loc} Radiology",          "621512", "Radiology",          ["X-rays","MRI","CT scans"]),
+            ("{loc} Home Health",        "621610", "Home Health",        ["nursing care","elder care","post-surgery"]),
+            ("{loc} Chiropractic",       "621310", "Chiropractic",       ["spinal adjustment","sports rehab","wellness"]),
+            ("{loc} Ambulance Service",  "621910", "Ambulance",          ["emergency transport","non-emergency transfer"]),
         ],
     },
     "Real Estate & Property": {
         "naics_sector": "53",
-        "naics_subsector": "531",
-        "businesses": [
-            ("Westlake Realty Group", "531210", "Real Estate Brokerage", ["home sales", "buyer representation", "listings"], "Austin", "TX"),
-            ("Barton Hills Property Mgmt", "531311", "Property Management", ["tenant screening", "rent collection", "maintenance"], "Austin", "TX"),
-            ("LonePoint Commercial", "531120", "Commercial Real Estate", ["office leasing", "retail space", "warehouse"], "Dallas", "TX"),
-            ("Zilker Title Company", "541191", "Title Services", ["title search", "escrow", "closing services"], "Austin", "TX"),
-            ("Capitol Appraisals", "531320", "Appraisal", ["home appraisal", "commercial valuation", "land assessment"], "Austin", "TX"),
-            ("Travis Mortgage Solutions", "522310", "Mortgage", ["home loans", "refinancing", "pre-approval"], "Austin", "TX"),
-            ("Gateway Home Inspections", "541350", "Inspection", ["home inspection", "foundation check", "roof inspection"], "Round Rock", "TX"),
-            ("Monarch Moving Co", "484210", "Moving Services", ["residential moving", "commercial moving", "packing"], "Austin", "TX"),
-            ("Heritage Restoration", "236118", "Restoration", ["historic renovation", "facade restoration", "structural repair"], "San Antonio", "TX"),
-            ("Greenfield Land Development", "237210", "Land Development", ["lot clearing", "site grading", "utility install"], "Georgetown", "TX"),
-            ("Austin Storage Solutions", "531130", "Storage", ["self storage", "climate controlled", "business storage"], "Austin", "TX"),
-            ("SunBelt Roofing & Solar", "238160", "Roofing & Solar", ["roof install", "solar panels", "energy audit"], "Austin", "TX"),
-            ("Lockhart Pest Control", "561710", "Pest Control", ["termite treatment", "rodent control", "mosquito spray"], "Kyle", "TX"),
-            ("Capitol Pool & Spa", "238990", "Pool Services", ["pool cleaning", "spa repair", "equipment install"], "Austin", "TX"),
+        "count": 100,
+        "templates": [
+            ("{loc} Realty Group",       "531210", "Real Estate",        ["home sales","buyer representation","listings"]),
+            ("{loc} Property Mgmt",      "531311", "Property Mgmt",      ["tenant screening","rent collection","maintenance"]),
+            ("{loc} Commercial RE",      "531120", "Commercial RE",      ["office leasing","retail space","warehouse"]),
+            ("{loc} Title Company",      "541191", "Title Services",     ["title search","escrow","closing services"]),
+            ("{loc} Appraisals",         "531320", "Appraisal",          ["home appraisal","commercial valuation"]),
+            ("{loc} Mortgage",           "522310", "Mortgage",           ["home loans","refinancing","pre-approval"]),
+            ("{loc} Home Inspections",   "541350", "Inspection",         ["home inspection","foundation check","roof inspection"]),
+            ("{last} Moving Co",         "484210", "Moving Services",    ["residential moving","commercial moving","packing"]),
+            ("{loc} Restoration",        "236118", "Restoration",        ["historic renovation","facade restoration"]),
+            ("{loc} Land Development",   "237210", "Land Development",   ["lot clearing","site grading","utility install"]),
+            ("{loc} Storage Solutions",  "531130", "Storage",            ["self storage","climate controlled","business storage"]),
+            ("{loc} Roofing & Solar",    "238160", "Roofing & Solar",    ["roof install","solar panels","energy audit"]),
+            ("{loc} Pool & Spa",         "238990", "Pool Services",      ["pool cleaning","spa repair","equipment install"]),
         ],
     },
     "Professional Services": {
         "naics_sector": "54",
-        "naics_subsector": "541",
-        "businesses": [
-            ("Pecan Partners CPA", "541211", "Accounting", ["tax preparation", "bookkeeping", "audit"], "Austin", "TX"),
-            ("Capitol Law Group", "541110", "Legal", ["business formation", "contracts", "IP law"], "Austin", "TX"),
-            ("Amplify Marketing Co", "541810", "Marketing Agency", ["brand strategy", "content marketing", "PR"], "Austin", "TX"),
-            ("Ridgeline HR Consulting", "541612", "HR Consulting", ["payroll", "benefits admin", "compliance"], "Round Rock", "TX"),
-            ("Benchmark Financial Advisors", "523930", "Financial Advisory", ["retirement planning", "wealth management", "investments"], "Austin", "TX"),
-            ("Clearpath Insurance Group", "524210", "Insurance", ["commercial insurance", "workers comp", "liability"], "Dallas", "TX"),
-            ("Skyline Architecture", "541310", "Architecture", ["commercial design", "residential plans", "interior design"], "Austin", "TX"),
-            ("Verde Environmental", "541620", "Environmental Consulting", ["site assessment", "remediation", "compliance"], "Austin", "TX"),
-            ("Pinnacle Staffing", "561311", "Staffing", ["temp staffing", "executive search", "contract placement"], "Houston", "TX"),
-            ("Atlas Print & Copy", "323111", "Printing", ["business cards", "brochures", "large format"], "Austin", "TX"),
-            ("QuickShip Courier", "492110", "Courier", ["same-day delivery", "document courier", "package delivery"], "Austin", "TX"),
-            ("Lonestar Translation", "541930", "Translation", ["document translation", "interpreting", "localization"], "San Antonio", "TX"),
-            ("Iron Oak Consulting", "541611", "Management Consulting", ["strategy", "operations", "process improvement"], "Austin", "TX"),
-            ("Westbank Notary Services", "541199", "Notary", ["mobile notary", "loan signing", "document notarization"], "Austin", "TX"),
+        "count": 100,
+        "templates": [
+            ("{last} CPA Group",         "541211", "Accounting",         ["tax preparation","bookkeeping","audit","payroll"]),
+            ("{last} Law Group",         "541110", "Legal",              ["business formation","contracts","IP law","litigation"]),
+            ("{loc} Marketing Agency",   "541810", "Marketing",          ["brand strategy","content marketing","PR"]),
+            ("{loc} HR Consulting",      "541612", "HR Consulting",      ["payroll","benefits admin","compliance"]),
+            ("{loc} Financial Advisors", "523930", "Financial Advisory", ["retirement planning","wealth management"]),
+            ("{loc} Insurance Group",    "524210", "Insurance",          ["commercial insurance","workers comp","liability"]),
+            ("{loc} Architecture",       "541310", "Architecture",       ["commercial design","residential plans"]),
+            ("{loc} Environmental",      "541620", "Environmental",      ["site assessment","remediation","compliance"]),
+            ("{loc} Staffing",           "561311", "Staffing",           ["temp staffing","executive search","placement"]),
+            ("{loc} Print & Copy",       "323111", "Printing",           ["business cards","brochures","large format"]),
+            ("{last} Translation Svc",   "541930", "Translation",        ["document translation","interpreting","localization"]),
+            ("{loc} Notary Services",    "541199", "Notary",             ["mobile notary","loan signing","document notarization"]),
         ],
     },
     "Retail & Wholesale": {
         "naics_sector": "42",
-        "naics_subsector": "423",
-        "businesses": [
-            ("Texas Auto Parts Depot", "423120", "Auto Parts", ["brake pads", "filters", "batteries"], "San Antonio", "TX"),
-            ("Southside Office Supply", "424120", "Office Supply", ["paper", "ink cartridges", "furniture"], "Austin", "TX"),
-            ("Hill Country Pet Supply", "453910", "Pet Supply", ["dog food", "cat litter", "pet toys"], "Dripping Springs", "TX"),
-            ("Capitol Janitorial Supply", "424690", "Cleaning Supply", ["disinfectant", "mops", "trash bags"], "Austin", "TX"),
-            ("Austin Uniform Co", "424350", "Uniform Supply", ["work shirts", "safety vests", "boots"], "Austin", "TX"),
-            ("RoundTop Furniture", "442110", "Furniture", ["office desks", "chairs", "shelving"], "Round Rock", "TX"),
-            ("Fiesta Party Rentals", "532289", "Party Rental", ["tables", "chairs", "tents"], "Austin", "TX"),
-            ("SafeGuard Fire & Safety", "423490", "Safety Equipment", ["fire extinguishers", "first aid kits", "hard hats"], "Austin", "TX"),
-            ("Greenway Packaging", "424130", "Packaging", ["boxes", "bubble wrap", "tape"], "Kyle", "TX"),
-            ("Bluebonnet Gifts & Floral", "453110", "Floral & Gifts", ["flower arrangements", "gift baskets", "event decor"], "Austin", "TX"),
-            ("Premier Signage Co", "339950", "Signage", ["business signs", "banners", "vehicle wraps"], "Cedar Park", "TX"),
-            ("Central Texas Fuel", "424720", "Fuel Distribution", ["diesel", "gasoline", "propane"], "San Marcos", "TX"),
-            ("Maverick Industrial Supply", "423840", "Industrial Supply", ["valves", "fittings", "pumps"], "Houston", "TX"),
-            ("Sunset Vending Co", "454210", "Vending", ["snack machines", "beverage machines", "micro-markets"], "Austin", "TX"),
+        "count": 100,
+        "templates": [
+            ("{loc} Auto Parts",         "423120", "Auto Parts",         ["brake pads","filters","batteries","tires"]),
+            ("{loc} Office Supply",      "424120", "Office Supply",      ["paper","ink cartridges","furniture","stationery"]),
+            ("{loc} Pet Supply",         "453910", "Pet Supply",         ["dog food","cat litter","pet toys","grooming"]),
+            ("{loc} Janitorial Supply",  "424690", "Cleaning Supply",    ["disinfectant","mops","trash bags","sanitizer"]),
+            ("{loc} Uniform Co",         "424350", "Uniform Supply",     ["work shirts","safety vests","boots","hardhats"]),
+            ("{loc} Furniture",          "442110", "Furniture",          ["office desks","chairs","shelving","file cabinets"]),
+            ("{loc} Party Rentals",      "532289", "Party Rental",       ["tables","chairs","tents","linens"]),
+            ("{loc} Safety Equipment",   "423490", "Safety Equipment",   ["fire extinguishers","first aid kits","PPE"]),
+            ("{loc} Packaging",          "424130", "Packaging",          ["boxes","bubble wrap","tape","poly bags"]),
+            ("{loc} Signage",            "339950", "Signage",            ["business signs","banners","vehicle wraps"]),
+            ("{loc} Fuel",               "424720", "Fuel Distribution",  ["diesel","gasoline","propane","lubricants"]),
+            ("{loc} Industrial Supply",  "423840", "Industrial Supply",  ["valves","fittings","pumps","motors"]),
         ],
     },
     "Logistics & Transportation": {
         "naics_sector": "48",
-        "naics_subsector": "484",
-        "businesses": [
-            ("Lone Star Freight", "484121", "Trucking", ["LTL freight", "full truckload", "flatbed"], "San Antonio", "TX"),
-            ("Capital Express Logistics", "488510", "Freight Brokerage", ["freight matching", "load booking", "carrier vetting"], "Austin", "TX"),
-            ("Gulf Coast Shipping", "483111", "Shipping", ["container shipping", "port logistics", "customs"], "Houston", "TX"),
-            ("FleetMaster Auto Repair", "811111", "Fleet Maintenance", ["oil change", "brake service", "tire rotation"], "Austin", "TX"),
-            ("AirDrop Drone Delivery", "492110", "Last Mile Delivery", ["drone delivery", "same-day parcels", "medical delivery"], "Austin", "TX"),
-            ("CrossRoads Warehousing", "493110", "Warehousing", ["pallet storage", "pick and pack", "inventory management"], "Round Rock", "TX"),
-            ("Panhandle Pallet Co", "321920", "Pallet Manufacturing", ["wood pallets", "custom crates", "pallet repair"], "Dallas", "TX"),
-            ("Interstate Fuel Services", "447190", "Fuel Services", ["fleet fueling", "fuel cards", "tank monitoring"], "San Antonio", "TX"),
-            ("Dispatch Pro Software", "541511", "Fleet Software", ["route optimization", "GPS tracking", "dispatch management"], "Austin", "TX"),
-            ("Rio Grande Customs Broker", "488510", "Customs Brokerage", ["import clearance", "tariff classification", "compliance"], "San Antonio", "TX"),
-            ("Texan Tow & Recovery", "488410", "Towing", ["roadside assistance", "heavy duty tow", "vehicle recovery"], "Austin", "TX"),
-            ("Guadalupe Auto Glass", "811122", "Auto Glass", ["windshield replacement", "chip repair", "tinting"], "San Marcos", "TX"),
-            ("I-35 Truck Wash", "811192", "Truck Wash", ["truck wash", "fleet cleaning", "detailing"], "Kyle", "TX"),
+        "count": 80,
+        "templates": [
+            ("{loc} Freight",            "484121", "Trucking",           ["LTL freight","full truckload","flatbed"]),
+            ("{loc} Logistics",          "488510", "Freight Brokerage",  ["freight matching","load booking","carrier vetting"]),
+            ("{loc} Shipping",           "483111", "Shipping",           ["container shipping","port logistics","customs"]),
+            ("{loc} Fleet Repair",       "811111", "Fleet Maintenance",  ["oil change","brake service","tire rotation"]),
+            ("{loc} Drone Delivery",     "492110", "Last Mile Delivery", ["drone delivery","same-day parcels","medical delivery"]),
+            ("{loc} Warehousing",        "493110", "Warehousing",        ["pallet storage","pick and pack","inventory mgmt"]),
+            ("{loc} Courier",            "492110", "Courier",            ["same-day delivery","document courier","package delivery"]),
+            ("{loc} Towing",             "488410", "Towing",             ["roadside assistance","heavy duty tow","vehicle recovery"]),
+        ],
+    },
+    "Education & Training": {
+        "naics_sector": "61",
+        "count": 80,
+        "templates": [
+            ("{loc} Academy",            "611110", "K-12 Education",     ["curriculum","tutoring","after-school programs"]),
+            ("{loc} Trade School",       "611519", "Trade Education",    ["welding cert","HVAC training","electrical apprentice"]),
+            ("{loc} Language School",    "611630", "Language Training",  ["ESL classes","Spanish courses","business English"]),
+            ("{loc} Music Academy",      "611610", "Music Education",    ["piano lessons","guitar","voice coaching"]),
+            ("{loc} Test Prep",          "611691", "Test Preparation",   ["SAT prep","GRE tutoring","professional cert"]),
+            ("{loc} Driving School",     "611692", "Driving School",     ["drivers ed","CDL training","defensive driving"]),
+            ("{last} Tutoring",          "611691", "Tutoring",           ["math tutoring","science","reading comprehension"]),
+            ("{loc} Childcare Center",   "624410", "Childcare",          ["daycare","preschool","after-school care"]),
+        ],
+    },
+    "Manufacturing": {
+        "naics_sector": "33",
+        "count": 80,
+        "templates": [
+            ("{loc} Metal Fabrication",  "332312", "Metal Fabrication",  ["steel beams","custom metalwork","welding"]),
+            ("{loc} Plastics",           "326199", "Plastics Mfg",       ["injection molding","custom plastics","packaging"]),
+            ("{loc} Woodworking",        "337110", "Wood Products",      ["cabinets","custom furniture","millwork"]),
+            ("{loc} Machine Shop",       "332710", "Machine Shop",       ["CNC machining","precision parts","prototyping"]),
+            ("{loc} Textiles",           "313210", "Textiles",           ["fabric","upholstery","industrial textiles"]),
+            ("{loc} Chemical Supply",    "325998", "Chemical Mfg",       ["industrial chemicals","solvents","adhesives"]),
+            ("{loc} Packaging Mfg",      "322211", "Packaging Mfg",      ["corrugated boxes","custom packaging","labels"]),
+            ("{loc} Tool & Die",         "333514", "Tool & Die",         ["custom tooling","die casting","mold making"]),
+        ],
+    },
+    "Energy & Utilities": {
+        "naics_sector": "22",
+        "count": 60,
+        "templates": [
+            ("{loc} Solar",              "221114", "Solar Energy",       ["solar panels","installation","energy storage"]),
+            ("{loc} Electric Co-op",     "221122", "Electric Utility",   ["power distribution","grid maintenance"]),
+            ("{loc} Wind Energy",        "221115", "Wind Energy",        ["wind turbines","maintenance","monitoring"]),
+            ("{loc} Energy Consulting",  "541690", "Energy Consulting",  ["energy audit","efficiency","carbon offset"]),
+            ("{loc} HVAC Services",      "238220", "HVAC Services",      ["AC install","heating repair","duct cleaning"]),
+            ("{loc} Electrical Services","238210", "Electrical Services", ["panel upgrades","wiring","lighting install"]),
+        ],
+    },
+    "Government & Civic": {
+        "naics_sector": "92",
+        "count": 60,
+        "templates": [
+            ("{loc} Public Works",       "237310", "Public Works",       ["road repair","bridge maintenance","utility"]),
+            ("{loc} Parks & Recreation", "712190", "Parks & Rec",        ["park maintenance","facility mgmt","events"]),
+            ("{loc} Water District",     "221310", "Water Utility",      ["water treatment","pipe maintenance","metering"]),
+            ("{loc} Transit Authority",  "485111", "Public Transit",     ["bus service","route planning","fleet maintenance"]),
+            ("{loc} Housing Authority",  "925110", "Public Housing",     ["affordable housing","property maintenance"]),
+            ("{loc} Fire Department",    "922160", "Fire Protection",    ["fire response","inspections","prevention"]),
+        ],
+    },
+    "Entertainment & Hospitality": {
+        "naics_sector": "71",
+        "count": 60,
+        "templates": [
+            ("{loc} Event Venue",        "713990", "Event Venue",        ["wedding venue","conference center","banquet hall"]),
+            ("{loc} Hotels",             "721110", "Lodging",            ["hotel rooms","conference rooms","banquet"]),
+            ("{loc} Fitness Center",     "713940", "Fitness",            ["gym membership","personal training","group classes"]),
+            ("{loc} Photography",        "541922", "Photography",        ["event photography","portraits","commercial"]),
+            ("{loc} DJ & Entertainment", "711510", "Entertainment",      ["live music","DJ services","event planning"]),
+            ("{last} Brewing Co",        "312120", "Brewery",            ["craft beer","taproom","brewery tours"]),
         ],
     },
 }
 
-# ── Relationship templates: who buys from whom within clusters ──
-# (buyer_index, seller_index) within the cluster business list
-INTRA_CLUSTER_EDGES = {
-    "Food & Beverage": [
-        (8, 0), (8, 9), (8, 2),    # Sunrise Catering buys from farms, meat, bakery
-        (2, 0), (2, 5),             # Bakery buys from farms, beverages
-        (5, 7), (5, 11),            # Beverages buys from coffee roasters, cafe supply
-        (14, 8), (14, 9),           # Food trucks buy from catering, meat market
-        (10, 3), (10, 6),           # Wines buys from Tex Mex dist, seafood
-        (13, 1),                    # Ice cream buys from dairy
-        (0, 12),                    # Farms buy from organics
-        (7, 3),                     # Coffee roasters buy from distributors
-    ],
-    "Technology & SaaS": [
-        (0, 8), (0, 5),             # CloudPeak buys hosting, telecom
-        (1, 0), (1, 8),             # DataBridge buys CloudPeak, hosting
-        (2, 8), (2, 5),             # CyberShield buys hosting, telecom
-        (3, 0),                     # Pixel Perfect buys CloudPeak
-        (9, 0), (9, 6),             # Barton Creek buys CloudPeak, staffing
-        (7, 0), (7, 8),             # StackForge buys CloudPeak, hosting
-        (11, 0), (11, 1),           # Quantum AI buys CloudPeak, DataBridge
-        (13, 3),                    # RocketLaunch buys Pixel Perfect
-        (4, 5),                     # Circuit Board buys telecom
-        (12, 2),                    # LoneStar Payments buys CyberShield
-    ],
-    "Healthcare & Medical": [
-        (0, 3), (0, 4),             # Family Practice buys supply, labs
-        (1, 3),                     # Dental buys supply
-        (4, 3),                     # BioLab buys supply
-        (5, 3),                     # Pharmacy buys supply
-        (6, 3),                     # Optometry buys supply
-        (7, 3),                     # PT buys supply
-        (8, 3),                     # Radiology buys supply
-        (10, 3), (10, 8),           # Ortho buys supply, radiology
-        (9, 5),                     # Home Health buys pharmacy
-        (11, 3),                    # Pediatric dental buys supply
-    ],
-    "Real Estate & Property": [
-        (0, 3), (0, 4),             # Realty buys title, appraisal
-        (1, 6), (1, 11),            # Property Mgmt buys inspection, roofing
-        (2, 3), (2, 4),             # Commercial RE buys title, appraisal
-        (9, 6),                     # Land Dev buys inspection
-        (7, 10),                    # Moving buys storage
-        (8, 11),                    # Restoration buys roofing
-        (0, 5),                     # Realty uses mortgage
-    ],
-    "Professional Services": [
-        (2, 9),                     # Marketing buys printing
-        (2, 10),                    # Marketing buys courier
-        (0, 9),                     # CPA buys printing
-        (3, 0),                     # HR consulting buys CPA
-        (4, 0),                     # Financial buys CPA
-        (6, 9),                     # Architecture buys printing
-        (12, 0),                    # Iron Oak buys CPA
-        (8, 11),                    # Staffing buys translation
-    ],
-    "Retail & Wholesale": [
-        (0, 7),                     # Auto parts buys safety equip
-        (1, 8),                     # Office supply buys packaging
-        (3, 8),                     # Janitorial buys packaging
-        (5, 8),                     # Furniture buys packaging
-        (4, 8),                     # Uniform buys packaging
-        (6, 10),                    # Party rental buys signage
-        (9, 8),                     # Gifts buys packaging
-    ],
-    "Logistics & Transportation": [
-        (0, 3), (0, 7),             # Freight buys fleet maint, fuel
-        (1, 0),                     # Express buys freight
-        (2, 9),                     # Shipping buys customs broker
-        (5, 6),                     # Warehousing buys pallets
-        (4, 8),                     # Drone delivery buys dispatch software
-        (0, 6),                     # Freight buys pallets
-    ],
-}
+# ═══════════════════════════════════════════════════════════════
+#  MEGA-HUB ENTITIES (high degree — connect to many businesses)
+# ═══════════════════════════════════════════════════════════════
 
-# ── Cross-cluster edges (buyer_cluster, buyer_idx, seller_cluster, seller_idx) ──
-CROSS_CLUSTER_EDGES = [
-    # Food businesses buy professional services
-    ("Food & Beverage", 2, "Professional Services", 0),      # Bakery buys CPA
-    ("Food & Beverage", 5, "Professional Services", 2),      # Beverages buys Marketing
-    ("Food & Beverage", 8, "Professional Services", 5),      # Catering buys Insurance
-    # Tech companies buy professional services
-    ("Technology & SaaS", 0, "Professional Services", 1),     # CloudPeak buys Legal
-    ("Technology & SaaS", 0, "Professional Services", 0),     # CloudPeak buys CPA
-    ("Technology & SaaS", 9, "Professional Services", 1),     # Barton Creek buys Legal
-    # Healthcare buys professional + retail
-    ("Healthcare & Medical", 0, "Professional Services", 0),  # Family Practice buys CPA
-    ("Healthcare & Medical", 0, "Professional Services", 5),  # Family Practice buys Insurance
-    ("Healthcare & Medical", 4, "Retail & Wholesale", 3),     # BioLab buys janitorial
-    # Real estate buys professional
-    ("Real Estate & Property", 0, "Professional Services", 1),  # Realty buys Legal
-    ("Real Estate & Property", 1, "Professional Services", 0),  # Property Mgmt buys CPA
-    ("Real Estate & Property", 1, "Professional Services", 5),  # Property Mgmt buys Insurance
-    # Everyone needs logistics
-    ("Retail & Wholesale", 0, "Logistics & Transportation", 0),   # Auto parts buys freight
-    ("Retail & Wholesale", 12, "Logistics & Transportation", 2),  # Industrial buys shipping
-    ("Food & Beverage", 3, "Logistics & Transportation", 0),      # Tex Mex dist buys freight
-    ("Food & Beverage", 6, "Logistics & Transportation", 2),      # Seafood buys shipping
-    # Everyone needs office/retail supplies
-    ("Technology & SaaS", 0, "Retail & Wholesale", 1),       # CloudPeak buys office supply
-    ("Healthcare & Medical", 0, "Retail & Wholesale", 1),    # Family Practice buys office
-    ("Professional Services", 1, "Retail & Wholesale", 1),   # Law firm buys office supply
-    # Logistics needs tech
-    ("Logistics & Transportation", 1, "Technology & SaaS", 0),  # Express buys CloudPeak
-    ("Logistics & Transportation", 5, "Technology & SaaS", 1),  # Warehousing buys DataBridge
+MEGA_HUBS = [
+    {
+        "name": "COSTCO BUSINESS CENTER",
+        "naics": "452910", "category": "Wholesale Club",
+        "commodities": ["bulk supplies","office supplies","cleaning products","food service","electronics"],
+        "city": "Austin", "state": "TX",
+        "connect_pct": 0.15,  # 15% of all businesses buy from Costco
+        "clusters": None,  # all clusters
+    },
+    {
+        "name": "CHASE BUSINESS BANKING",
+        "naics": "522110", "category": "Commercial Banking",
+        "commodities": ["business checking","merchant services","business loans","payroll","credit lines"],
+        "city": "Dallas", "state": "TX",
+        "connect_pct": 0.12,
+        "clusters": None,
+    },
+    {
+        "name": "AWS CLOUD SERVICES",
+        "naics": "518210", "category": "Cloud Infrastructure",
+        "commodities": ["cloud compute","S3 storage","RDS databases","Lambda","CloudFront CDN"],
+        "city": "Seattle", "state": "WA",
+        "connect_pct": 0.08,
+        "clusters": ["Technology & SaaS", "Healthcare & Medical", "Manufacturing"],
+    },
+    {
+        "name": "UNITED PARCEL SERVICE",
+        "naics": "492110", "category": "Package Delivery",
+        "commodities": ["ground shipping","express delivery","freight","returns management"],
+        "city": "Atlanta", "state": "GA",
+        "connect_pct": 0.10,
+        "clusters": ["Retail & Wholesale", "Food & Beverage", "Manufacturing", "Healthcare & Medical"],
+    },
+    {
+        "name": "ADP WORKFORCE SOLUTIONS",
+        "naics": "541214", "category": "Payroll Services",
+        "commodities": ["payroll processing","HR management","tax filing","benefits admin"],
+        "city": "New York", "state": "NY",
+        "connect_pct": 0.07,
+        "clusters": None,
+    },
+    {
+        "name": "GRAINGER INDUSTRIAL SUPPLY",
+        "naics": "423840", "category": "Industrial MRO",
+        "commodities": ["motors","pumps","safety gear","hand tools","fasteners","electrical"],
+        "city": "Chicago", "state": "IL",
+        "connect_pct": 0.10,
+        "clusters": ["Manufacturing", "Energy & Utilities", "Logistics & Transportation", "Government & Civic"],
+    },
 ]
 
+# ═══════════════════════════════════════════════════════════════
+#  CROSS-CLUSTER BUYING RULES
+# ═══════════════════════════════════════════════════════════════
+# (buyer_cluster, seller_cluster, probability)
+# "X% of businesses in buyer_cluster buy from a random business in seller_cluster"
+
+CROSS_CLUSTER_RULES = [
+    # Everyone needs professional services
+    ("Food & Beverage",           "Professional Services", 0.25),
+    ("Technology & SaaS",         "Professional Services", 0.30),
+    ("Healthcare & Medical",      "Professional Services", 0.25),
+    ("Real Estate & Property",    "Professional Services", 0.30),
+    ("Retail & Wholesale",        "Professional Services", 0.20),
+    ("Logistics & Transportation","Professional Services", 0.15),
+    ("Manufacturing",             "Professional Services", 0.20),
+    ("Education & Training",      "Professional Services", 0.15),
+    ("Energy & Utilities",        "Professional Services", 0.15),
+    ("Entertainment & Hospitality","Professional Services", 0.20),
+    # Many need logistics
+    ("Food & Beverage",           "Logistics & Transportation", 0.20),
+    ("Retail & Wholesale",        "Logistics & Transportation", 0.25),
+    ("Manufacturing",             "Logistics & Transportation", 0.30),
+    ("Healthcare & Medical",      "Logistics & Transportation", 0.10),
+    # Tech is horizontal
+    ("Healthcare & Medical",      "Technology & SaaS",    0.15),
+    ("Real Estate & Property",    "Technology & SaaS",    0.12),
+    ("Retail & Wholesale",        "Technology & SaaS",    0.10),
+    ("Logistics & Transportation","Technology & SaaS",    0.15),
+    ("Manufacturing",             "Technology & SaaS",    0.12),
+    ("Education & Training",      "Technology & SaaS",    0.10),
+    ("Entertainment & Hospitality","Technology & SaaS",   0.08),
+    # Retail supplies
+    ("Food & Beverage",           "Retail & Wholesale",   0.15),
+    ("Healthcare & Medical",      "Retail & Wholesale",   0.12),
+    ("Education & Training",      "Retail & Wholesale",   0.10),
+    ("Entertainment & Hospitality","Retail & Wholesale",  0.12),
+    # Real estate / property
+    ("Entertainment & Hospitality","Real Estate & Property", 0.10),
+    ("Healthcare & Medical",      "Real Estate & Property",  0.08),
+    ("Education & Training",      "Real Estate & Property",  0.08),
+    # Energy
+    ("Manufacturing",             "Energy & Utilities",   0.12),
+    ("Real Estate & Property",    "Energy & Utilities",   0.10),
+]
+
+# ═══════════════════════════════════════════════════════════════
+#  GENERATION
+# ═══════════════════════════════════════════════════════════════
 
 def _golden_id(name):
-    """Deterministic golden record ID from business name."""
     h = hashlib.md5(name.encode()).hexdigest()[:8]
     return f"G-{h}"
 
 
-def _generate_ein():
-    prefix = random.choice([74, 75, 76, 82, 83, 84, 46, 47])
+def _gen_ein():
+    prefix = random.choice([74,75,76,82,83,84,46,47,27,36,45,61,62,73,81,91,92,93,94,95])
     return f"{prefix}-{random.randint(1000000, 9999999)}"
 
 
-def _generate_contact():
-    first = random.choice(FIRST_NAMES)
-    last = random.choice(LAST_NAMES)
-    return f"{first} {last}", first, last
-
-
-def _generate_email(first, last, biz_name):
-    slug = biz_name.lower().replace(" ", "").replace("&", "").replace("'", "")[:12]
-    return random.choice([
-        f"{first.lower()}@{slug}.com",
-        f"info@{slug}.com",
-        f"{first[0].lower()}{last.lower()}@{slug}.com",
-    ])
-
-
-def _generate_phone(area_code="512"):
+def _gen_phone(area_code):
     return f"({area_code}) {random.randint(200,999)}-{random.randint(1000,9999)}"
 
 
-def _generate_address(city):
-    number = random.randint(100, 19999)
-    street = random.choice(STREET_NAMES)
-    addr = f"{number} {street}"
-    if random.random() < 0.30:
-        addr += f", {random.choice(SUITE_TYPES)} {random.randint(1, 400)}"
-    return addr
+def _gen_email(biz_name):
+    slug = biz_name.lower().replace(" ","").replace("&","").replace("'","")[:14]
+    prefix = random.choice(["info","contact","sales","hello","admin","office"])
+    return f"{prefix}@{slug}.com"
 
 
-def _get_zip(city):
-    return random.choice(ZIP_CODES.get(city, ["78701"]))
+def _loc_descriptor(city):
+    """Generate a location-based business name prefix."""
+    descriptors = {
+        "Austin": ["Austin","ATX","Capital City","Congress Ave","South Austin","Barton Creek"],
+        "Houston": ["Houston","Gulf Coast","Bayou City","Space City","Heights"],
+        "Dallas": ["Dallas","North Texas","Trinity","Big D","Uptown"],
+        "San Antonio": ["San Antonio","Alamo City","River Walk","Mission City"],
+        "Round Rock": ["Round Rock","Brushy Creek"],
+        "Cedar Park": ["Cedar Park","Lakeline"],
+        "Denver": ["Denver","Mile High","Front Range","Rocky Mountain","Colorado"],
+        "Phoenix": ["Phoenix","Valley","Sonoran","Desert","Southwest"],
+        "Los Angeles": ["Los Angeles","Pacific","West Coast","SoCal","Sunset"],
+        "San Francisco": ["San Francisco","Bay Area","Golden Gate","Pacific","Marina"],
+        "Chicago": ["Chicago","Windy City","Lakeside","Midwest","Loop"],
+        "Atlanta": ["Atlanta","Peachtree","Southern","Buckhead","Piedmont"],
+        "Miami": ["Miami","South Beach","Biscayne","Coral","Tropical"],
+        "Seattle": ["Seattle","Puget Sound","Emerald City","Pacific NW","Cascade"],
+        "Nashville": ["Nashville","Music City","Cumberland","Southern","Volunteer"],
+        "Portland": ["Portland","Rose City","Pacific NW","Willamette","Cascadia"],
+        "New York": ["New York","Metro","Empire","Manhattan","Tri-State"],
+        "Georgetown": ["Georgetown","Sun City"],
+        "Kyle": ["Kyle","Plum Creek"],
+        "San Marcos": ["San Marcos","Bobcat"],
+        "Dripping Springs": ["Dripping Springs","Hill Country"],
+        "Pflugerville": ["Pflugerville","Blackhawk"],
+    }
+    return random.choice(descriptors.get(city, [city]))
 
 
 def generate_network_businesses():
-    """Generate 100 golden records organized by industry cluster."""
-    random.seed(cfg.RANDOM_SEED + 1000)  # Different seed from invoice generator
+    """Generate ~1200 golden records organized by industry cluster."""
+    random.seed(cfg.RANDOM_SEED + 1000)
 
     businesses = []
-    for cluster_name, cluster in NETWORK_CLUSTERS.items():
-        for name, naics, category, commodities, city, state in cluster["businesses"]:
-            contact_full, first, last = _generate_contact()
-            area = "512" if state == "TX" and city in ("Austin", "Round Rock", "Cedar Park",
-                "Pflugerville", "Georgetown", "Dripping Springs") else "210" if city == "San Antonio" else "713" if city == "Houston" else "214" if city == "Dallas" else "512"
+    used_names = set()
+
+    for cluster_name, cluster_def in CLUSTERS.items():
+        target_count = cluster_def["count"]
+        templates = cluster_def["templates"]
+        generated = 0
+
+        while generated < target_count:
+            template = random.choice(templates)
+            name_pattern, naics, category, commodities = template
+
+            city = _pick_city()
+            state, area_code, zips, _ = METROS[city]
+            loc = _loc_descriptor(city)
+            last = fake.last_name()
+
+            raw_name = name_pattern.format(loc=loc, city=city, last=last)
+            canonical = raw_name.upper()
+
+            if canonical in used_names:
+                continue
+            used_names.add(canonical)
+
+            has_ein = random.random() < 0.70
+            has_contact = random.random() < 0.75
+            has_email = random.random() < 0.70
+            has_phone = random.random() < 0.75
+
+            contact_name = fake.name() if has_contact else None
+
+            # Pick 2-3 commodities from template + add 0-1 random
+            n_comm = random.randint(2, min(4, len(commodities)))
+            biz_commodities = random.sample(commodities, n_comm)
+
+            avg_txn = round(random.uniform(500, 30000), 2)
+            txn_count = random.randint(8, 250)
+            total_vol = round(avg_txn * txn_count, 2)
 
             biz = {
-                "golden_record_id": _golden_id(name),
-                "canonical_name": name.upper(),
-                "name_variants": [name.upper()],
+                "golden_record_id": _golden_id(raw_name),
+                "canonical_name": canonical,
+                "name_variants": [canonical],
                 "cluster": cluster_name,
-                "ein": _generate_ein() if random.random() < 0.7 else None,
-                "contact_name": contact_full if random.random() < 0.8 else None,
-                "email": _generate_email(first, last, name) if random.random() < 0.7 else None,
-                "phone_digits": _generate_phone(area) if random.random() < 0.75 else None,
+                "ein": _gen_ein() if has_ein else None,
+                "contact_name": contact_name,
+                "email": _gen_email(raw_name) if has_email else None,
+                "phone_digits": _gen_phone(area_code) if has_phone else None,
                 "naics_code": naics,
-                "naics_sector": cluster["naics_sector"],
-                "naics_subsector": cluster["naics_subsector"],
+                "naics_sector": cluster_def["naics_sector"],
                 "category": category,
-                "commodities": commodities,
+                "commodities": biz_commodities,
                 "city": city.upper(),
                 "state": state,
-                "zip5": _get_zip(city),
-                "street_address": _generate_address(city) if random.random() < 0.6 else None,
-                "avg_transaction": round(random.uniform(500, 25000), 2),
-                "transaction_count": random.randint(10, 200),
-                "total_volume": 0,  # computed below
+                "zip5": random.choice(zips),
+                "street_address": fake.street_address() if random.random() < 0.55 else None,
+                "avg_transaction": avg_txn,
+                "transaction_count": txn_count,
+                "total_volume": total_vol,
+                "volume_bracket": "HIGH" if total_vol > 500000 else "MEDIUM" if total_vol > 100000 else "LOW",
+                "confidence": round(random.uniform(0.65, 0.98), 3),
             }
-            biz["total_volume"] = round(biz["avg_transaction"] * biz["transaction_count"], 2)
-            biz["volume_bracket"] = (
-                "HIGH" if biz["total_volume"] > 500000
-                else "MEDIUM" if biz["total_volume"] > 100000
-                else "LOW"
-            )
             businesses.append(biz)
+            generated += 1
+
+    # ── Add mega-hub entities ──
+    for hub in MEGA_HUBS:
+        canonical = hub["name"]
+        if canonical in used_names:
+            continue
+        used_names.add(canonical)
+
+        state = hub["state"]
+        city = hub["city"]
+        metro = METROS.get(city, ("TX","512",["78701"],1))
+
+        biz = {
+            "golden_record_id": _golden_id(hub["name"]),
+            "canonical_name": canonical,
+            "name_variants": [canonical],
+            "cluster": "Mega-Hub",
+            "ein": _gen_ein(),
+            "contact_name": fake.name(),
+            "email": _gen_email(hub["name"]),
+            "phone_digits": _gen_phone(metro[1]),
+            "naics_code": hub["naics"],
+            "naics_sector": hub["naics"][:2],
+            "category": hub["category"],
+            "commodities": hub["commodities"],
+            "city": city.upper(),
+            "state": state,
+            "zip5": random.choice(metro[2]),
+            "street_address": fake.street_address(),
+            "avg_transaction": round(random.uniform(2000, 50000), 2),
+            "transaction_count": random.randint(100, 500),
+            "total_volume": 0,
+            "volume_bracket": "HIGH",
+            "confidence": round(random.uniform(0.95, 0.99), 3),
+        }
+        biz["total_volume"] = round(biz["avg_transaction"] * biz["transaction_count"], 2)
+        businesses.append(biz)
 
     return businesses
 
 
 def generate_network_edges(businesses):
-    """Generate vendor/client relationship edges between businesses."""
+    """Generate relationship edges using probabilistic rules."""
     random.seed(cfg.RANDOM_SEED + 2000)
 
-    # Build lookup: cluster_name -> [businesses in order]
+    # Build cluster lookup
     clusters = {}
+    biz_by_id = {}
     for biz in businesses:
         clusters.setdefault(biz["cluster"], []).append(biz)
+        biz_by_id[biz["golden_record_id"]] = biz
 
     edges = []
-    edge_id_counter = 1
+    edge_set = set()  # avoid duplicates
+    eid = 1
 
-    # Intra-cluster edges
-    for cluster_name, pairs in INTRA_CLUSTER_EDGES.items():
-        cluster_biz = clusters.get(cluster_name, [])
-        for buyer_idx, seller_idx in pairs:
-            if buyer_idx < len(cluster_biz) and seller_idx < len(cluster_biz):
-                buyer = cluster_biz[buyer_idx]
-                seller = cluster_biz[seller_idx]
-                volume = round(random.uniform(5000, 200000), 2)
-                count = random.randint(5, 80)
-                edges.append({
-                    "edge_id": f"NET-E-{edge_id_counter:04d}",
-                    "source_entity_id": buyer["golden_record_id"],
-                    "target_entity_id": seller["golden_record_id"],
-                    "source_name": buyer["canonical_name"],
-                    "target_name": seller["canonical_name"],
-                    "rel_type": "BUYS_FROM",
-                    "transaction_volume": volume,
-                    "transaction_count": count,
-                })
-                edge_id_counter += 1
+    def _add_edge(buyer, seller, vol=None, cnt=None):
+        nonlocal eid
+        key = (buyer["golden_record_id"], seller["golden_record_id"])
+        if key in edge_set or key[0] == key[1]:
+            return
+        edge_set.add(key)
+        edges.append({
+            "edge_id": f"NET-E-{eid:05d}",
+            "source_entity_id": buyer["golden_record_id"],
+            "target_entity_id": seller["golden_record_id"],
+            "source_name": buyer["canonical_name"],
+            "target_name": seller["canonical_name"],
+            "rel_type": "BUYS_FROM",
+            "transaction_volume": vol or round(random.uniform(2000, 200000), 2),
+            "transaction_count": cnt or random.randint(3, 80),
+        })
+        eid += 1
 
-    # Cross-cluster edges
-    for buyer_cluster, buyer_idx, seller_cluster, seller_idx in CROSS_CLUSTER_EDGES:
+    # ── 1. Intra-cluster edges ──
+    # Each business buys from 1-4 others in its cluster
+    for cluster_name, cluster_biz in clusters.items():
+        if cluster_name == "Mega-Hub":
+            continue
+        for biz in cluster_biz:
+            # Pick 1-4 suppliers within the same cluster
+            n_suppliers = random.randint(1, min(4, len(cluster_biz) - 1))
+            potential = [b for b in cluster_biz if b["golden_record_id"] != biz["golden_record_id"]]
+            if potential:
+                suppliers = random.sample(potential, min(n_suppliers, len(potential)))
+                for supplier in suppliers:
+                    _add_edge(biz, supplier)
+
+    # ── 2. Cross-cluster edges ──
+    for buyer_cluster, seller_cluster, prob in CROSS_CLUSTER_RULES:
         buyer_list = clusters.get(buyer_cluster, [])
         seller_list = clusters.get(seller_cluster, [])
-        if buyer_idx < len(buyer_list) and seller_idx < len(seller_list):
-            buyer = buyer_list[buyer_idx]
-            seller = seller_list[seller_idx]
-            volume = round(random.uniform(2000, 80000), 2)
-            count = random.randint(3, 40)
-            edges.append({
-                "edge_id": f"NET-E-{edge_id_counter:04d}",
-                "source_entity_id": buyer["golden_record_id"],
-                "target_entity_id": seller["golden_record_id"],
-                "source_name": buyer["canonical_name"],
-                "target_name": seller["canonical_name"],
-                "rel_type": "BUYS_FROM",
-                "transaction_volume": volume,
-                "transaction_count": count,
-            })
-            edge_id_counter += 1
+        if not seller_list:
+            continue
+        for buyer in buyer_list:
+            if random.random() < prob:
+                seller = random.choice(seller_list)
+                _add_edge(buyer, seller)
+
+    # ── 3. Mega-hub edges ──
+    all_non_hub = [b for b in businesses if b["cluster"] != "Mega-Hub"]
+    for hub_def in MEGA_HUBS:
+        hub_biz = biz_by_id.get(_golden_id(hub_def["name"]))
+        if not hub_biz:
+            continue
+
+        target_clusters = hub_def["clusters"]
+        candidates = all_non_hub if target_clusters is None else [
+            b for b in all_non_hub if b["cluster"] in target_clusters
+        ]
+
+        for candidate in candidates:
+            if random.random() < hub_def["connect_pct"]:
+                _add_edge(candidate, hub_biz)
 
     return edges
 
 
+# ═══════════════════════════════════════════════════════════════
+#  SYNC TO NEO4J
+# ═══════════════════════════════════════════════════════════════
+
 def _build_sync_payload(biz):
-    """Build the golden record payload for POST /sync/golden-record."""
     return {
         "golden_record_id": biz["golden_record_id"],
         "canonical_name": biz["canonical_name"],
@@ -437,7 +617,7 @@ def _build_sync_payload(biz):
                 "name_first_token": biz["canonical_name"].split()[0],
                 "name_tokens": biz["canonical_name"].split(),
                 "legal_suffix": None,
-                "ein_clean": biz.get("ein", "").replace("-", "") if biz.get("ein") else None,
+                "ein_clean": biz["ein"].replace("-","") if biz.get("ein") else None,
                 "phone_digits": biz.get("phone_digits"),
                 "email": biz.get("email"),
                 "email_domain": biz["email"].split("@")[1] if biz.get("email") else None,
@@ -445,7 +625,7 @@ def _build_sync_payload(biz):
             "industry": {
                 "naics_code": biz["naics_code"],
                 "naics_sector": biz["naics_sector"],
-                "naics_subsector": biz["naics_subsector"],
+                "naics_subsector": biz["naics_code"][:3] if biz.get("naics_code") else None,
                 "original_category": biz["category"],
                 "commodity_keywords": biz["commodities"],
             },
@@ -474,21 +654,20 @@ def _build_sync_payload(biz):
             },
         },
         "source_count": 1,
-        "confidence": round(random.uniform(0.7, 0.95), 3),
+        "confidence": biz.get("confidence", 0.80),
         "status": "ACTIVE",
         "merged_into": None,
         "entity_type": "PHANTOM",
         "source_records": [],
         "bucket_keys": [
             biz["canonical_name"].split()[0].upper(),
-            biz.get("ein", "").replace("-", "")[:5] if biz.get("ein") else None,
+            biz["ein"].replace("-","")[:5] if biz.get("ein") else None,
             biz["city"],
         ],
     }
 
 
 def sync_to_network(businesses, edges):
-    """POST golden records and edges to the MCP sync API."""
     session = requests.Session()
     session.headers["Content-Type"] = "application/json"
 
@@ -496,7 +675,7 @@ def sync_to_network(businesses, edges):
     edge_ok, edge_fail = 0, 0
 
     print(f"\n  Syncing {len(businesses)} golden records to Neo4j...")
-    for biz in businesses:
+    for i, biz in enumerate(businesses):
         payload = _build_sync_payload(biz)
         try:
             r = session.post(f"{SYNC_BASE_URL}/sync/golden-record", json=payload, timeout=10)
@@ -504,15 +683,20 @@ def sync_to_network(businesses, edges):
                 gr_ok += 1
             else:
                 gr_fail += 1
-                print(f"    FAIL {biz['canonical_name']}: {r.status_code} {r.text[:100]}")
+                if gr_fail <= 5:
+                    print(f"    FAIL {biz['canonical_name']}: {r.status_code} {r.text[:100]}")
         except Exception as e:
             gr_fail += 1
-            print(f"    ERROR {biz['canonical_name']}: {e}")
+            if gr_fail <= 5:
+                print(f"    ERROR {biz['canonical_name']}: {e}")
+
+        if (i + 1) % 100 == 0:
+            print(f"    ... {i+1}/{len(businesses)} records synced")
 
     print(f"  Golden records: {gr_ok} ok, {gr_fail} failed")
 
     print(f"\n  Syncing {len(edges)} relationship edges...")
-    for edge in edges:
+    for i, edge in enumerate(edges):
         payload = {
             "edge_id": edge["edge_id"],
             "source_entity_id": edge["source_entity_id"],
@@ -527,39 +711,72 @@ def sync_to_network(businesses, edges):
                 edge_ok += 1
             else:
                 edge_fail += 1
-                print(f"    FAIL {edge['edge_id']}: {r.status_code} {r.text[:100]}")
+                if edge_fail <= 5:
+                    print(f"    FAIL {edge['edge_id']}: {r.status_code} {r.text[:100]}")
         except Exception as e:
             edge_fail += 1
-            print(f"    ERROR {edge['edge_id']}: {e}")
+            if edge_fail <= 5:
+                print(f"    ERROR {edge['edge_id']}: {e}")
+
+        if (i + 1) % 500 == 0:
+            print(f"    ... {i+1}/{len(edges)} edges synced")
 
     print(f"  Edges: {edge_ok} ok, {edge_fail} failed")
     return gr_ok, gr_fail, edge_ok, edge_fail
 
 
 def cmd_network():
-    """Generate and seed the Intuit Business Network (Seed 1)."""
+    """Generate and seed the Intuit Business Network."""
     print("=" * 60)
     print("QB Network Graph — Intuit Business Network Seed")
     print("=" * 60)
 
-    # Generate
     print("\nStep 1: Generating global business network...")
     businesses = generate_network_businesses()
     edges = generate_network_edges(businesses)
 
+    # Stats
     cluster_counts = {}
+    city_counts = {}
+    state_counts = {}
     for b in businesses:
         cluster_counts[b["cluster"]] = cluster_counts.get(b["cluster"], 0) + 1
+        city_counts[b["city"]] = city_counts.get(b["city"], 0) + 1
+        state_counts[b["state"]] = state_counts.get(b["state"], 0) + 1
 
     print(f"  {len(businesses)} businesses across {len(cluster_counts)} clusters:")
-    for cluster, count in cluster_counts.items():
-        print(f"    {cluster}: {count}")
-    print(f"  {len(edges)} relationship edges")
+    for cluster, count in sorted(cluster_counts.items(), key=lambda x: -x[1]):
+        print(f"    {cluster:35s} {count:4d}")
+
+    print(f"\n  Geographic spread: {len(state_counts)} states, {len(city_counts)} cities")
+    for state, count in sorted(state_counts.items(), key=lambda x: -x[1])[:8]:
+        print(f"    {state}: {count}")
+
+    print(f"\n  {len(edges)} relationship edges")
+
+    # Degree distribution
+    degree = {}
+    for e in edges:
+        degree[e["source_entity_id"]] = degree.get(e["source_entity_id"], 0) + 1
+        degree[e["target_entity_id"]] = degree.get(e["target_entity_id"], 0) + 1
+
+    buckets = {"0": 0, "1-2": 0, "3-5": 0, "6-10": 0, "11-20": 0, "21+": 0}
+    for b in businesses:
+        d = degree.get(b["golden_record_id"], 0)
+        if d == 0: buckets["0"] += 1
+        elif d <= 2: buckets["1-2"] += 1
+        elif d <= 5: buckets["3-5"] += 1
+        elif d <= 10: buckets["6-10"] += 1
+        elif d <= 20: buckets["11-20"] += 1
+        else: buckets["21+"] += 1
+
+    print(f"\n  Degree distribution:")
+    for bucket, count in buckets.items():
+        print(f"    {bucket:6s} connections: {count:4d} entities")
 
     # Write manifest
     manifest_dir = cfg.SEED_DIR / "network"
     manifest_dir.mkdir(parents=True, exist_ok=True)
-
     (manifest_dir / "businesses.json").write_text(
         json.dumps(businesses, indent=2, default=str)
     )
@@ -568,7 +785,7 @@ def cmd_network():
     )
     print(f"\n  Manifest written to {manifest_dir}/")
 
-    # Sync to Neo4j via MCP sync API
+    # Sync to Neo4j
     print("\nStep 2: Syncing to Neo4j via MCP sync API...")
     gr_ok, gr_fail, edge_ok, edge_fail = sync_to_network(businesses, edges)
 

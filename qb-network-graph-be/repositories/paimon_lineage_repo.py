@@ -13,6 +13,18 @@ logger = logging.getLogger(__name__)
 MCP_SYNC_URL = "http://localhost:8084"
 
 
+def _sanitize_floats(obj):
+    """Replace NaN/Infinity floats with None so JSON serialization doesn't fail."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 def _parse_json(val):
     if val is None:
         return None
@@ -98,6 +110,8 @@ class PaimonLineageRepository(AbstractLineageRepository):
                     entry[key] = val.isoformat()
                 elif val:
                     entry[key] = str(val)
+            # Sanitize non-JSON-compliant floats (NaN, Infinity)
+            entry = _sanitize_floats(entry)
             entry["entity_id"] = entity_id
             result.append(entry)
         return result

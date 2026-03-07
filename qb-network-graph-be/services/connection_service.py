@@ -174,3 +174,50 @@ class ConnectionService:
             "entities": entities,
             "relationships": relationships,
         }
+
+    def remove_connection(self, entity_id: str, company_id: str = "1") -> dict:
+        """Remove relationships between the user's entity and a target.
+
+        Handles both BUYS_FROM and SELLS_TO in either direction,
+        including relationships through intermediate QB company nodes.
+        """
+        if not self._neo4j_driver:
+            return {"error": "Neo4j unavailable", "removed": False}
+
+        # 1. Try direct relationship (BUYS_FROM or SELLS_TO in either direction)
+        cypher = """
+            MATCH (user:Entity {id: $company_id})-[r]-(target:Entity {id: $target_id})
+            WHERE type(r) IN ['BUYS_FROM', 'SELLS_TO']
+            WITH r, target.canonical_name AS name
+            DELETE r
+            RETURN name
+        """
+        result = self._neo4j_run(cypher, {
+            "company_id": company_id,
+            "target_id": entity_id,
+        })
+
+        # 2. If no direct relationship, try via intermediate QB company nodes
+        if not result:
+            cypher2 = """
+                MATCH (user:Entity {id: $company_id})-[:BUYS_FROM|SELLS_TO]-(mid:Entity)-[r:BUYS_FROM|SELLS_TO]-(target:Entity {id: $target_id})
+                WHERE mid.entity_type IS NULL OR mid.entity_type <> 'PHANTOM'
+                WITH r, target.canonical_name AS name
+                DELETE r
+                RETURN name
+            """
+            result = self._neo4j_run(cypher2, {
+                "company_id": company_id,
+                "target_id": entity_id,
+            })
+
+        target_name = result[0]["name"] if result else entity_id
+        removed = len(result) > 0
+
+        logger.info(f"Remove connection to {entity_id} ({target_name}): {'success' if removed else 'no relationship found'}")
+
+        return {
+            "removed_entity_id": entity_id,
+            "removed_entity_name": target_name,
+            "removed": removed,
+        }

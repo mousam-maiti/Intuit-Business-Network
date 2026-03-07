@@ -43,6 +43,8 @@ class PendingResolution(BaseModel):
     key_uncertainty: str = ""
     trigger_type: str = "AI_AGENT"
     status: str = "PENDING"             # PENDING | MERGED | REJECTED
+    company_id: Optional[str] = None    # QB company that owns the source record
+    record_type: Optional[str] = None   # "vendor" or "customer"
     decided_by: Optional[str] = None
     decided_at: Optional[str] = None
     created_at: str = Field(

@@ -249,6 +249,8 @@ class EntityWriterService:
             reasoning=review_reasoning.get("reasoning", ""),
             key_uncertainty=review_reasoning.get("key_uncertainty", ""),
             trigger_type=review_reasoning.get("trigger_type", "AI_AGENT"),
+            company_id=str(company_id) if company_id else None,
+            record_type=record_type,
         )
 
         relationship = None

@@ -6,7 +6,7 @@ import { fmt } from '@/utils/format';
 import { getRelType } from '@/utils/graph';
 import { config } from '@/config/env';
 import { searchEntities } from '@/api/search';
-import { addConnection, addExistingConnection } from '@/api/connections';
+import { addConnection, addExistingConnection, removeConnection } from '@/api/connections';
 import { getNativeOverrides, saveNativeOverride, createNativeMerge, undoNativeMerge } from '@/api/native';
 import { Widget, RelTypeBadge, EntityDetailPanel, MergeFlowModal } from '@/components/shared';
 
@@ -171,6 +171,21 @@ export default function SearchPage({ onNavigate, networkRelationships = [], refr
     }
     // Refresh network so the badge updates immediately
     if (refreshNetwork) await refreshNetwork();
+  };
+
+  const [removing, setRemoving] = useState(null);
+
+  const handleRemoveConnection = async (e, entity) => {
+    if (e) e.stopPropagation();
+    setRemoving(entity.id);
+    try {
+      await removeConnection(entity.id);
+      if (refreshNetwork) await refreshNetwork();
+    } catch (err) {
+      console.error('Failed to remove connection:', err);
+    } finally {
+      setRemoving(null);
+    }
   };
 
   const handleSaveNative = async (entityId, overrides) => {
@@ -349,7 +364,9 @@ export default function SearchPage({ onNavigate, networkRelationships = [], refr
               onOpenAI={() => onNavigate('assist', selectedEntity)}
               onShowOnNetwork={() => onNavigate('network', selectedEntity)}
               onAddConnection={(ent) => setAddTarget(ent)}
+              onRemoveConnection={(ent) => handleRemoveConnection(null, ent)}
               isInNetwork={networkEntityIds.has(selectedEntity.id)}
+              isDirectConnection={!!networkRelationships.find((r) => (r.source === selectedEntityId && r.target === selectedEntity.id) || (r.target === selectedEntityId && r.source === selectedEntity.id))}
               onMerge={() => setMergeSource(selectedEntity)}
               onSelectEntity={setSelectedEntity}
               vendorRels={networkRelationships.filter((r) => (r.source === selectedEntity.id || r.target === selectedEntity.id) && getRelType(r, selectedEntity.id) === 'vendor').sort((a, b) => b.volume - a.volume)}

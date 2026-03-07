@@ -276,11 +276,17 @@ class ConversationalAgent:
             table["rows"] = [[str(cell) for cell in row] for row in table.get("rows", [])]
             table["headers"] = [str(h) for h in table.get("headers", [])]
 
+        # Sanitize chart — LLM sometimes returns graph-shaped data instead of [{name, value}]
+        chart = merged.get("chart")
+        if chart and isinstance(chart, dict):
+            if not isinstance(chart.get("data"), list):
+                chart = None
+
         return WSResponse(
             content=merged.get("content", ""),
             entities=merged.get("entities"),
             table=table,
-            chart=merged.get("chart"),
+            chart=chart,
             scores=merged.get("scores"),
             signals=merged.get("signals"),
             actions=merged.get("actions"),
