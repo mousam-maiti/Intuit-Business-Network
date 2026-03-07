@@ -60,67 +60,67 @@ The conversational agent supports natural language queries with chart rendering:
 ### Business Network Graph
 Interactive force-directed graph showing all vendors (orange) and customers (blue) with hop-colored depth rings around the central company entity.
 
-![Business Network Graph](UI_Screenshots/Screenshot%202026-03-07%20at%203.20.23%20PM.png)
+![Business Network Graph](UI_Screenshots/01-business-network-graph.png)
 
 ### Supply Chain Traversal
 Trace upstream/downstream supply chains with path highlighting. The right panel shows the selected entity's profile, match score, and transaction volume.
 
-![Supply Chain Traversal](UI_Screenshots/Screenshot%202026-03-07%20at%203.21.06%20PM.png)
+![Supply Chain Traversal](UI_Screenshots/02-supply-chain-traversal.png)
 
 ### Shortest Path Finder
 Find the shortest path between any two entities in the network, with the path highlighted on the graph and hop count displayed.
 
-![Shortest Path](UI_Screenshots/Screenshot%202026-03-07%20at%203.21.58%20PM.png)
+![Shortest Path](UI_Screenshots/03-shortest-path-finder.png)
 
 ### Global Search
 Search across the entire Intuit Business Network with faceted filters (network membership, industry). Results show match relevance scores and "Add to Network" actions for external entities.
 
-![Global Search](UI_Screenshots/Screenshot%202026-03-07%20at%203.22.55%20PM.png)
+![Global Search](UI_Screenshots/04-global-search.png)
 
 ### Add to Network
 Add an entity from search results to your network as a vendor or client. The system resolves whether the business already exists under a different name.
 
-![Add to Network](UI_Screenshots/Screenshot%202026-03-07%20at%203.23.13%20PM.png)
+![Add to Network](UI_Screenshots/05-add-to-network.png)
 
 ### Expanded Network View
 The full network graph after growing connections, showing the dense web of vendor-client relationships across the QuickBooks ecosystem.
 
-![Expanded Network](UI_Screenshots/Screenshot%202026-03-07%20at%203.23.40%20PM.png)
+![Expanded Network](UI_Screenshots/06-expanded-network.png)
 
 ### Match Review Queue
 Human-in-the-loop review for uncertain entity matches. Shows AI confidence, 5-dimension classifier scores, candidate golden records with similarity bars, and merge actions.
 
-![Match Review](UI_Screenshots/Screenshot%202026-03-07%20at%203.24.04%20PM.png)
+![Match Review](UI_Screenshots/07-match-review.png)
 
 ### Connection Lineage & Time Travel
 Audit trail for any golden record entity: timeline of merge/create/review events, decision reasoning, trigger tags, and point-in-time state reconstruction.
 
-![Connection Lineage](UI_Screenshots/Screenshot%202026-03-07%20at%203.24.29%20PM.png)
+![Connection Lineage](UI_Screenshots/08-connection-lineage.png)
 
 ### Intuit Assist &mdash; AI Chat
 Conversational AI powered by Gemini 2.5 with ReAct reasoning. Supports risk analysis, volume assessment, and auto-generated charts. Session history on the left.
 
-![AI Chat](UI_Screenshots/Screenshot%202026-03-07%20at%203.24.52%20PM.png)
+![AI Chat](UI_Screenshots/09-ai-chat.png)
 
 ### Infrastructure Monitor (Service Health & Key Metrics)
 Grafana-themed dashboard showing real-time service health, key entity/relationship/audit metrics, Redis cache stats, and Neo4j graph statistics.
 
-![Infra Monitor Top](UI_Screenshots/Screenshot%202026-03-07%20at%203.25.52%20PM.png)
+![Infra Monitor Top](UI_Screenshots/10-infra-monitor-top.png)
 
 ### Infrastructure Monitor (Data Stores & Observability)
 Continued view showing Paimon warehouse table counts, Elasticsearch indices, and OTEL Collector pipeline throughput.
 
-![Infra Monitor Bottom](UI_Screenshots/Screenshot%202026-03-07%20at%203.25.59%20PM.png)
+![Infra Monitor Bottom](UI_Screenshots/11-infra-monitor-bottom.png)
 
 ### Native Merge with AI Analysis
 Merge two entities from the native perspective. Intuit Assist runs a multi-tool analysis (entity profile, graph overlap, field similarity, merge risk) before confirming.
 
-![Native Merge](UI_Screenshots/Screenshot%202026-03-07%20at%203.37.25%20PM.png)
+![Native Merge](UI_Screenshots/12-native-merge.png)
 
 ### Add Connection Form
 Add a new vendor or client connection with identity, industry, commodity, and location fields. Writes to MySQL and triggers the CDC &rarr; classification &rarr; resolution pipeline.
 
-![Add Connection](UI_Screenshots/Screenshot%202026-03-07%20at%203.48.27%20PM.png)
+![Add Connection](UI_Screenshots/13-add-connection.png)
 
 ---
 
