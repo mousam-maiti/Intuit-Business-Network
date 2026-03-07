@@ -10,6 +10,8 @@ import os
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Shared llm_providers package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "qb-network-graph-llm-providers"))
 
 from config import AgentConfig, MySQLConfig, EmbeddingConfig, LLMConfig, Neo4jConfig, RedisConfig
 from clients.mysql_client import MySQLClient

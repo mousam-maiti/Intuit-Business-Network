@@ -17,7 +17,14 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 
-import google.generativeai as genai
+import sys
+from pathlib import Path
+
+# Add shared llm_providers package to path
+_llm_pkg = str(Path(__file__).resolve().parent.parent / "qb-network-graph-llm-providers")
+if _llm_pkg not in sys.path:
+    sys.path.insert(0, _llm_pkg)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -45,13 +52,14 @@ _db: ChatDB | MockChatDB | None = None
 _session_mgr: SessionManager | None = None
 _context_win: ContextWindow | None = None
 _agent: ConversationalAgent | None = None
+_llm = None
 _cfg = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Wire all components on startup."""
-    global _mcp, _db, _session_mgr, _context_win, _agent, _cfg
+    global _mcp, _db, _session_mgr, _context_win, _agent, _llm, _cfg
 
     logger.info("Loading config...")
     _cfg = load_config()
@@ -65,12 +73,18 @@ async def lifespan(app: FastAPI):
             export_interval_ms=_cfg.telemetry.export_interval_ms,
         )
 
-    # ── Configure Gemini API ──────────────────────────────
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if api_key:
-        genai.configure(api_key=api_key)
-    else:
-        logger.warning("GEMINI_API_KEY not set — LLM calls will fail")
+    # ── Create LLM provider ──────────────────────────────
+    from llm_providers import create_llm_provider
+    llm = create_llm_provider(
+        provider=_cfg.llm.provider,
+        model=_cfg.llm.model,
+        temperature=_cfg.llm.temperature,
+        max_tokens=_cfg.llm.max_tokens,
+    )
+    await llm.connect()
+    _llm = llm
+    if not llm.available:
+        logger.warning("LLM provider unavailable — agent calls will fail")
 
     # ── Connect to MCP Server ────────────────────────────
     logger.info(f"Connecting to MCP Server at {_cfg.mcp_server.url}...")
@@ -97,11 +111,10 @@ async def lifespan(app: FastAPI):
 
     # ── Build components ─────────────────────────────────
     _session_mgr = SessionManager(_db)
-    _context_win = ContextWindow(_db, _cfg.context)
+    _context_win = ContextWindow(_db, _cfg.context, llm)
     _agent = ConversationalAgent(
         mcp=mcp,
-        llm_model=_cfg.llm.model,
-        temperature=_cfg.llm.temperature,
+        llm=llm,
         max_iterations=_cfg.context.max_iterations,
     )
 
@@ -111,7 +124,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  MCP Server: {_cfg.mcp_server.url} ({'connected' if mcp.connected else 'FAILED'})")
     logger.info(f"  MCP Tools:  {len(mcp._tool_names)} available")
     logger.info(f"  MySQL:      {'connected' if _db.connected else 'in-memory fallback'}")
-    logger.info(f"  LLM:        {_cfg.llm.model}")
+    logger.info(f"  LLM:        {llm.model_name} ({'connected' if llm.available else 'UNAVAILABLE'})")
     logger.info(f"  OTEL:       {'ACTIVE' if otel_active else 'disabled'}")
     logger.info(f"  Context:    max={_cfg.context.max_messages} keep={_cfg.context.keep_recent} max_iter={_cfg.context.max_iterations}")
     logger.info("=" * 60)
@@ -245,7 +258,7 @@ async def websocket_chat(ws: WebSocket, session_id: str, user_id: str = Query(de
 
                     # Maybe compress context
                     session = _session_mgr.get_session(session_id)
-                    await _context_win.maybe_compress(session, _cfg.llm.model)
+                    await _context_win.maybe_compress(session)
 
                 except Exception as e:
                     logger.exception(f"Error processing message: {e}")
@@ -269,7 +282,12 @@ async def health():
         components["mcp_tools"] = len(_mcp._tool_names)
     if _db:
         components["mysql"] = "connected" if _db.connected else "in-memory"
-    components["llm"] = _cfg.llm.model if _cfg else "unknown"
+    if _llm:
+        components["llm"] = "connected" if _llm.available else "unavailable"
+        components["llm_provider"] = _cfg.llm.provider if _cfg else "unknown"
+        components["llm_model"] = _llm.model_name
+    else:
+        components["llm"] = "unknown"
 
     overall = "healthy" if _agent else "starting"
     return {

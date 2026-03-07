@@ -1,5 +1,5 @@
 """
-Embedding client — Gemini text-embedding-004 for semantic similarity.
+Embedding client — semantic similarity via pluggable EmbeddingProvider.
 
 Called by semantic_similarity tool when compare_fields returns ambiguous (0.40-0.85).
 Computes per-dimension cosine similarity between orphan and candidate persona texts.
@@ -7,6 +7,7 @@ Computes per-dimension cosine similarity between orphan and candidate persona te
 Falls back to random vectors if API unavailable (local dev).
 """
 from __future__ import annotations
+import hashlib
 import logging
 import time
 import numpy as np
@@ -14,13 +15,6 @@ from typing import Optional
 from config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
-
-# Try Gemini
-try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
-except ImportError:
-    HAS_GEMINI = False
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -36,41 +30,31 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 class EmbeddingClient:
     def __init__(self, cfg: EmbeddingConfig):
         self._cfg = cfg
+        self._provider = None
         self._available = False
         self._using_mock = False
         self._model_name = cfg.model
         self._dimension = cfg.dimension
 
     async def connect(self):
-        if not HAS_GEMINI:
-            logger.warning("google-generativeai not installed — using mock embeddings")
-            self._using_mock = True
-            return
-
-        import os
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("GEMINI_API_KEY not set — using mock embeddings")
-            self._using_mock = True
-            return
-
+        from llm_providers import create_embedding_provider
         try:
-            genai.configure(api_key=api_key)
-            # Quick test
-            result = genai.embed_content(
-                model=f"models/{self._model_name}",
-                content="test",
+            self._provider = create_embedding_provider(
+                provider=self._cfg.provider,
+                model=self._cfg.model,
+                dim=self._cfg.dimension,
                 task_type=self._cfg.task_type,
             )
-            if result and "embedding" in result:
+            await self._provider.connect()
+            if self._provider.available:
                 self._available = True
-                self._dimension = len(result["embedding"])
-                logger.info(f"Gemini embedding connected: {self._model_name} ({self._dimension}d)")
+                self._dimension = self._provider.dimension
+                logger.info(f"Embedding connected: {self._model_name} ({self._dimension}d)")
             else:
+                logger.warning("Embedding provider unavailable — using mock embeddings")
                 self._using_mock = True
-                logger.warning("Gemini embedding test failed — using mock")
         except Exception as e:
-            logger.warning(f"Gemini embedding unavailable ({e}) — using mock")
+            logger.warning(f"Embedding init failed ({e}) — using mock embeddings")
             self._using_mock = True
 
     def embed(self, text: str) -> Optional[np.ndarray]:
@@ -79,28 +63,20 @@ class EmbeddingClient:
             return None
 
         if self._using_mock:
-            # Deterministic mock: hash-based pseudo-random vector
-            import hashlib
             h = hashlib.md5(text.encode()).hexdigest()
             seed = int(h[:8], 16)
             rng = np.random.RandomState(seed)
             vec = rng.randn(self._dimension).astype(np.float32)
             return vec / np.linalg.norm(vec)
 
-        try:
-            result = genai.embed_content(
-                model=f"models/{self._model_name}",
-                content=text,
-                task_type=self._cfg.task_type,
-            )
-            return np.array(result["embedding"], dtype=np.float32)
-        except Exception as e:
-            logger.error(f"Embedding failed for text '{text[:50]}': {e}")
-            return None
+        result = self._provider.embed(text)
+        return result
 
     def embed_batch(self, texts: list[str]) -> list[Optional[np.ndarray]]:
         """Embed multiple texts. Returns list of numpy arrays (or None for empty)."""
-        return [self.embed(t) for t in texts]
+        if self._using_mock:
+            return [self.embed(t) for t in texts]
+        return self._provider.embed_batch(texts)
 
     def compute_similarity(
         self,

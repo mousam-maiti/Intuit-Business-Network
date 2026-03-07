@@ -51,6 +51,7 @@ class MCPConfig:
 
 @dataclass
 class LLMConfig:
+    provider: str = "gemini"
     model: str = "gemini-2.5-pro"
     temperature: float = 0.3
     max_tokens: int = 4096
@@ -128,6 +129,7 @@ def load_config(path: str | None = None) -> AgentConfig:
     cfg.mcp_server.url = _env("MCP_SERVER_URL", cfg.mcp_server.url)
     cfg.mcp_server.timeout_ms = _env("MCP_SERVER_TIMEOUT_MS", cfg.mcp_server.timeout_ms, int)
 
+    cfg.llm.provider = _env("LLM_PROVIDER", cfg.llm.provider)
     cfg.llm.model = _env("LLM_MODEL", cfg.llm.model)
     cfg.llm.temperature = _env("LLM_TEMPERATURE", cfg.llm.temperature, float)
     cfg.llm.max_tokens = _env("LLM_MAX_TOKENS", cfg.llm.max_tokens, int)

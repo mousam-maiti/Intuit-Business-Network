@@ -13,8 +13,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# Add shared llm_providers package to path
+_llm_pkg = str(Path(__file__).resolve().parent.parent / "qb-network-graph-llm-providers")
+if _llm_pkg not in sys.path:
+    sys.path.insert(0, _llm_pkg)
 
 from fastapi import FastAPI, APIRouter, Request
 from fastapi.responses import JSONResponse

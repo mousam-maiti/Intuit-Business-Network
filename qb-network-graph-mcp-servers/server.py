@@ -10,8 +10,15 @@ Usage:
     mcp dev server.py                       # MCP Inspector (development)
 """
 import logging
+import os
 import sys
 import threading
+from pathlib import Path
+
+# Add shared llm_providers package to path
+_llm_pkg = str(Path(__file__).resolve().parent.parent / "qb-network-graph-llm-providers")
+if _llm_pkg not in sys.path:
+    sys.path.insert(0, _llm_pkg)
 
 # Configure logging before any imports that use it
 logging.basicConfig(

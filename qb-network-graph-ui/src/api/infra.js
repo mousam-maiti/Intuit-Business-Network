@@ -18,3 +18,10 @@ mcp.interceptors.response.use((res) => res.data, (err) => Promise.reject(err));
 export async function getMcpHealth() {
   return mcp.get('/health');
 }
+
+const entityAgent = axios.create({ baseURL: 'http://localhost:8085', timeout: 5000 });
+entityAgent.interceptors.response.use((res) => res.data, (err) => Promise.reject(err));
+
+export async function getEntityAgentHealth() {
+  return entityAgent.get('/api/v1/health');
+}

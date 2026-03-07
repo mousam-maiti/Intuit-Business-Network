@@ -1,5 +1,5 @@
 """
-ContextWindow — context assembly + compression for Gemini multi-turn chat.
+ContextWindow — context assembly + compression for multi-turn chat.
 
 Builds the message history from summary + recent messages, and triggers
 compression when the session exceeds the message threshold.
@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import logging
 
-import google.generativeai as genai
-
 from chat.prompts import COMPRESSION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -19,15 +17,17 @@ logger = logging.getLogger(__name__)
 class ContextWindow:
     """Assembles and compresses conversation context."""
 
-    def __init__(self, db, config):
+    def __init__(self, db, config, llm=None):
         """
         Args:
             db: ChatDB or MockChatDB instance
             config: ContextConfig dataclass
+            llm: LLMProvider instance for compression
         """
         self.db = db
         self.max_messages = config.max_messages
         self.keep_recent = config.keep_recent
+        self._llm = llm
 
     def assemble_context(self, session: dict, new_message: str) -> list[dict]:
         """Build Gemini message history from summary + recent messages + new message.
@@ -57,13 +57,17 @@ class ContextWindow:
 
         return history
 
-    async def maybe_compress(self, session: dict, llm_model: str) -> bool:
+    async def maybe_compress(self, session: dict) -> bool:
         """Trigger compression if message_count >= threshold.
 
         Returns True if compression was performed.
         """
         message_count = session.get("message_count", 0)
         if message_count < self.max_messages:
+            return False
+
+        if not self._llm or not self._llm.available:
+            logger.warning("LLM unavailable — skipping compression")
             return False
 
         session_id = session["session_id"]
@@ -87,11 +91,9 @@ class ContextWindow:
             if existing_summary:
                 conversation_text = f"[Previous summary]\n{existing_summary}\n\n[New messages]\n{conversation_text}"
 
-            # Call Gemini for compression
+            # Call LLM for compression
             prompt = COMPRESSION_PROMPT.format(conversation=conversation_text)
-            model = genai.GenerativeModel(llm_model)
-            response = model.generate_content(prompt)
-            summary = response.text.strip()
+            summary = self._llm.generate(prompt).strip()
 
             # Update session with new summary
             self.db.update_session(

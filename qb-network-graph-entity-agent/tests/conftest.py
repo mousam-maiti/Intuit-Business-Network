@@ -10,6 +10,8 @@ import os
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Shared llm_providers package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "qb-network-graph-llm-providers"))
 
 from models.persona import (
     ClassifiedPersona, IdentityDimension, IndustryDimension,

@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Server, Database, HardDrive, RefreshCw,
-  CheckCircle, XCircle, AlertCircle, Zap,
+  CheckCircle, XCircle, AlertCircle, Zap, BrainCircuit,
 } from 'lucide-react';
 import { Widget } from '@/components/shared';
-import { getInfraMetrics, getConvAgentHealth } from '@/api/infra';
+import { getInfraMetrics, getConvAgentHealth, getEntityAgentHealth } from '@/api/infra';
 
 // Grafana-inspired dark palette
 const G = {
@@ -150,12 +150,13 @@ export default function InfraMonitorPage() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const results = { be: 'ok', convAgent: null };
+    const results = { be: 'ok', convAgent: null, entityAgent: null };
 
     try {
-      const [infraRes, convRes] = await Promise.allSettled([
+      const [infraRes, convRes, entityRes] = await Promise.allSettled([
         getInfraMetrics(),
         getConvAgentHealth(),
+        getEntityAgentHealth(),
       ]);
 
       if (infraRes.status === 'fulfilled') {
@@ -166,6 +167,10 @@ export default function InfraMonitorPage() {
 
       if (convRes.status === 'fulfilled') {
         results.convAgent = convRes.value;
+      }
+
+      if (entityRes.status === 'fulfilled') {
+        results.entityAgent = entityRes.value;
       }
     } catch {
       // handled per-service
@@ -189,6 +194,7 @@ export default function InfraMonitorPage() {
   const kibana = metrics?.kibana;
   const otel = metrics?.otel_collector;
   const conv = services?.convAgent;
+  const entity = services?.entityAgent;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto" style={{ backgroundColor: G.bg }}>
@@ -221,6 +227,7 @@ export default function InfraMonitorPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <ServiceCard name="Backend API" port={8087} status={services?.be === 'ok' ? 'connected' : 'error'} detail="REST API + Graph queries" />
             <ServiceCard name="Conv Agent" port={8082} status={conv?.status || 'unknown'} detail={conv?.components?.llm || ''} />
+            <ServiceCard name="Entity Agent" port={8085} status={entity?.status || 'unknown'} detail={entity?.components?.llm_model || ''} />
             <ServiceCard name="MCP Server" port={8083} status={conv?.components?.mcp_server || 'unknown'} detail={conv?.components?.mcp_tools ? `${conv.components.mcp_tools} tools` : ''} />
             <ServiceCard name="Elasticsearch" port={9200} status={elastic?.status === 'green' || elastic?.status === 'yellow' ? 'connected' : elastic?.status || 'unknown'} detail={elastic?.cluster_name || ''} />
             <ServiceCard name="Kibana" port={5601} status={kibana?.status === 'available' ? 'connected' : kibana?.status || 'unknown'} detail={kibana?.version ? `v${kibana.version}` : ''} />
@@ -361,6 +368,70 @@ export default function InfraMonitorPage() {
                   </div>
                 </>
               )}
+            </div>
+          </DarkPanel>
+
+          {/* LLM Providers */}
+          <DarkPanel title="LLM Providers">
+            <div className="space-y-3">
+              {/* Conv Agent LLM */}
+              <div className="rounded px-3 py-2.5" style={{ backgroundColor: G.surface, border: `1px solid ${G.border}` }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded flex items-center justify-center" style={{ backgroundColor: G.purple + '20' }}>
+                      <BrainCircuit size={12} style={{ color: G.purple }} />
+                    </div>
+                    <span className="text-xs font-medium" style={{ color: G.text }}>Conversational Agent</span>
+                  </div>
+                  <StatusBadge status={conv?.components?.llm || 'unknown'} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                    <span style={{ color: G.textMuted }}>provider</span>
+                    <span className="font-mono font-medium" style={{ color: G.cyan }}>{conv?.components?.llm_provider || '--'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                    <span style={{ color: G.textMuted }}>model</span>
+                    <span className="font-mono font-medium" style={{ color: G.text }}>{conv?.components?.llm_model || '--'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Entity Agent LLM + Embedding */}
+              <div className="rounded px-3 py-2.5" style={{ backgroundColor: G.surface, border: `1px solid ${G.border}` }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded flex items-center justify-center" style={{ backgroundColor: G.blue + '20' }}>
+                      <BrainCircuit size={12} style={{ color: G.blue }} />
+                    </div>
+                    <span className="text-xs font-medium" style={{ color: G.text }}>Entity Resolution Agent</span>
+                  </div>
+                  <StatusBadge status={entity?.components?.llm || 'unknown'} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                    <span style={{ color: G.textMuted }}>provider</span>
+                    <span className="font-mono font-medium" style={{ color: G.cyan }}>{entity?.components?.llm_provider || '--'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                    <span style={{ color: G.textMuted }}>model</span>
+                    <span className="font-mono font-medium" style={{ color: G.text }}>{entity?.components?.llm_model || '--'}</span>
+                  </div>
+                </div>
+                <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${G.border}` }}>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: G.textMuted }}>Embedding</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                      <span style={{ color: G.textMuted }}>provider</span>
+                      <span className="font-mono font-medium" style={{ color: G.cyan }}>{entity?.components?.embedding_provider || '--'}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded" style={{ backgroundColor: G.card }}>
+                      <span style={{ color: G.textMuted }}>model</span>
+                      <span className="font-mono font-medium" style={{ color: G.text }}>{entity?.components?.embedding_model || '--'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </DarkPanel>
         </div>

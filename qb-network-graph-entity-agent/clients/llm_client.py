@@ -1,10 +1,8 @@
 """
-LLM client — Google Gemini for Step 4 agent reasoning.
+LLM client — Step 4 agent reasoning via pluggable LLMProvider.
 
 Called when Steps 1-3 (deterministic + embedding) leave the decision ambiguous.
 The LLM receives all accumulated evidence and makes the final call.
-
-Uses the same GEMINI_API_KEY as embedding_client — single API key for everything.
 
 Design doc §3: "The orchestrator IS the LLM."
 """
@@ -16,12 +14,6 @@ from typing import Optional
 from config import LLMConfig
 
 logger = logging.getLogger(__name__)
-
-try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
-except ImportError:
-    HAS_GEMINI = False
 
 
 # ── System prompt from design doc §3 ────────────────────────
@@ -102,48 +94,47 @@ You MUST respond with ONLY a JSON object, no other text:
 class LLMClient:
     def __init__(self, cfg: LLMConfig):
         self._cfg = cfg
-        self._model = None          # Flash — used if needed for quick calls
-        self._ambiguous_model = None # Pro — used for Step 4 ambiguous reasoning
+        self._llm = None           # Primary LLMProvider
+        self._ambiguous_llm = None # Pro model LLMProvider for Step 4
         self._available = False
 
     async def connect(self):
-        if not HAS_GEMINI:
-            logger.warning("google-generativeai package not installed — LLM unavailable")
-            return
-        import os
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("GEMINI_API_KEY not set — LLM unavailable")
-            return
+        from llm_providers import create_llm_provider
         try:
-            genai.configure(api_key=api_key)
-            gen_config = genai.GenerationConfig(
+            self._llm = create_llm_provider(
+                provider=self._cfg.provider,
+                model=self._cfg.model,
                 temperature=self._cfg.temperature,
-                max_output_tokens=self._cfg.max_tokens,
-                response_mime_type="application/json",
+                max_tokens=self._cfg.max_tokens,
             )
-            self._model = genai.GenerativeModel(
-                model_name=self._cfg.model,
-                system_instruction=SYSTEM_PROMPT,
-                generation_config=gen_config,
-            )
+            await self._llm.connect()
+
             ambiguous_name = getattr(self._cfg, 'ambiguous_model', None) or self._cfg.model
-            self._ambiguous_model = genai.GenerativeModel(
-                model_name=ambiguous_name,
-                system_instruction=SYSTEM_PROMPT,
-                generation_config=gen_config,
-            )
-            self._available = True
-            logger.info(f"Gemini LLM connected: {self._cfg.model} (ambiguous: {ambiguous_name})")
+            if ambiguous_name != self._cfg.model:
+                self._ambiguous_llm = create_llm_provider(
+                    provider=self._cfg.provider,
+                    model=ambiguous_name,
+                    temperature=self._cfg.temperature,
+                    max_tokens=self._cfg.max_tokens,
+                )
+                await self._ambiguous_llm.connect()
+            else:
+                self._ambiguous_llm = self._llm
+
+            self._available = self._llm.available
+            if self._available:
+                logger.info(f"LLM connected: {self._cfg.model} (ambiguous: {ambiguous_name})")
+            else:
+                logger.warning("LLM provider not available after connect")
         except Exception as e:
-            logger.warning(f"Gemini LLM init failed: {e}")
+            logger.warning(f"LLM init failed: {e}")
 
     @property
     def available(self) -> bool:
         return self._available
 
     def reason(self, evidence: dict) -> dict:
-        """Call Gemini with accumulated evidence for Step 4 reasoning.
+        """Call LLM with accumulated evidence for Step 4 reasoning.
 
         Args:
             evidence: dict with keys:
@@ -163,21 +154,19 @@ class LLMClient:
             return self._fallback_review(evidence, "LLM unavailable")
 
         try:
-            # Use Pro model for Step 4 ambiguous reasoning
-            model = self._ambiguous_model or self._model
-            model_name = getattr(self._cfg, 'ambiguous_model', None) or self._cfg.model
-            response = model.generate_content(user_message)
+            llm = self._ambiguous_llm or self._llm
+            model_name = llm.model_name
+            text = llm.generate(
+                user_message,
+                system=SYSTEM_PROMPT,
+                response_format="json",
+            )
             elapsed_ms = int((time.time() - start) * 1000)
 
-            # Handle empty response (safety block or max_tokens with no valid part)
-            if not response.candidates or not response.candidates[0].content.parts:
-                finish = getattr(response.candidates[0], 'finish_reason', 'UNKNOWN') if response.candidates else 'NO_CANDIDATES'
-                logger.error(f"LLM returned empty response (finish_reason={finish}) after {elapsed_ms}ms")
-                return self._fallback_review(evidence, f"Empty LLM response (finish_reason={finish})")
+            if not text.strip():
+                logger.error(f"LLM returned empty response after {elapsed_ms}ms")
+                return self._fallback_review(evidence, "Empty LLM response")
 
-            text = response.candidates[0].content.parts[0].text
-
-            # Parse JSON from response
             result = self._parse_response(text)
             result["llm_duration_ms"] = elapsed_ms
             result["model_used"] = model_name
@@ -193,7 +182,7 @@ class LLMClient:
             return self._fallback_review(evidence, error_str)
 
     def _build_evidence_prompt(self, evidence: dict) -> str:
-        """Build the user message with all evidence for Gemini."""
+        """Build the user message with all evidence for the LLM."""
         parts = ["# Entity Resolution Evidence\n"]
 
         # Orphan

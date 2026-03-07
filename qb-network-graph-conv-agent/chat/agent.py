@@ -2,9 +2,9 @@
 ConversationalAgent — ReAct (Reasoning + Acting) loop with MCP tools.
 
 Core flow:
-1. User message + conversation history → Gemini (text generation, no function calling)
-2. Gemini returns Thought + Action → parse tool call → execute MCP tool → stream progress
-3. Feed Observation back → repeat until Gemini returns Answer
+1. User message + conversation history → LLM (text generation, no function calling)
+2. LLM returns Thought + Action → parse tool call → execute MCP tool → stream progress
+3. Feed Observation back → repeat until LLM returns Answer
 4. Parse JSON response → merge with formatter blocks → send to client
 """
 from __future__ import annotations
@@ -14,7 +14,6 @@ import logging
 import re
 from typing import Any, Callable, Awaitable, Union
 
-import google.generativeai as genai
 from json_repair import repair_json
 
 from clients.mcp_client import MCPToolClient, MCPError
@@ -36,50 +35,12 @@ RE_ANSWER  = re.compile(r"^Answer:\s*(.+)$", re.DOTALL | re.MULTILINE)
 _MAX_OBSERVATION_LEN = 4000
 
 
-def _safe_text(response) -> str:
-    """Safely extract text from a Gemini response (avoids .text accessor crash on empty parts)."""
-    try:
-        candidate = response.candidates[0]
-        # Handle MALFORMED_FUNCTION_CALL — model tried native function calling
-        # instead of text-based ReAct. Extract function call info and convert to ReAct format.
-        finish = getattr(candidate, "finish_reason", None)
-        # finish_reason enum: 1=STOP, 2=MAX_TOKENS, 3=SAFETY, 4=RECITATION, 6=MALFORMED_FUNCTION_CALL
-        if finish and (str(finish) == "MALFORMED_FUNCTION_CALL" or getattr(finish, 'value', None) == 6
-                       or str(finish) == "6" or "MALFORMED" in str(finish).upper()):
-            # Try to recover function call parts as ReAct Action text
-            parts = candidate.content.parts if hasattr(candidate, "content") and candidate.content else []
-            for part in parts:
-                fc = getattr(part, "function_call", None)
-                if fc:
-                    name = getattr(fc, "name", "unknown")
-                    args = dict(fc.args) if hasattr(fc, "args") and fc.args else {}
-                    import json as _json
-                    return f"Thought: I need to look up this information.\nAction: {name}({_json.dumps(args)})"
-                if hasattr(part, "text") and part.text:
-                    return part.text
-            # Nothing recoverable — nudge model
-            return ""
-    except (IndexError, AttributeError):
-        pass
-
-    try:
-        return response.text or ""
-    except (ValueError, AttributeError):
-        try:
-            parts = response.candidates[0].content.parts
-            return parts[0].text if parts else ""
-        except (IndexError, AttributeError):
-            return ""
-
-
 class ConversationalAgent:
     """ReAct-powered conversational agent with MCP tool integration."""
 
-    def __init__(self, mcp: MCPToolClient, llm_model: str, temperature: float = 0.3,
-                 max_iterations: int = 8):
+    def __init__(self, mcp: MCPToolClient, llm, max_iterations: int = 8):
         self.mcp = mcp
-        self.llm_model = llm_model
-        self.temperature = temperature
+        self.llm = llm  # LLMProvider instance
         self.max_iterations = max_iterations
 
     async def handle_message(
@@ -114,32 +75,20 @@ class ConversationalAgent:
                 system += f"\n\nCurrent UI context: company_id='{company_id}', company_name='{entity_name}', page='{page or 'unknown'}'."
                 system += f"\nWhen the user asks about 'my vendors', 'my customers', or 'my network', use company_id='{company_id}' with the get_company_connections tool."
 
-        # Create model WITHOUT tools param (text generation only)
-        model = genai.GenerativeModel(
-            model_name=self.llm_model,
-            system_instruction=system,
-            generation_config=genai.GenerationConfig(
-                temperature=self.temperature,
-                max_output_tokens=2048,
-            ),
-        )
-
-        # Start chat with history
-        chat = model.start_chat(history=history)
-
         # ── ReAct loop ────────────────────────────────────────
         all_formatter_blocks: dict[str, Any] = {}
         current_prompt = user_message
         iteration = 0
+        # Maintain growing chat history for multi-turn
+        chat_history = list(history)
 
         for iteration in range(1, self.max_iterations + 1):
             try:
-                response = chat.send_message(current_prompt)
+                text = self.llm.chat(chat_history, current_prompt, system=system)
             except Exception as e:
                 err_str = str(e)
-                logger.warning(f"ReAct iter {iteration}: send_message error: {err_str}")
+                logger.warning(f"ReAct iter {iteration}: chat error: {err_str}")
                 if "MALFORMED_FUNCTION_CALL" in err_str.upper() or "content {" in err_str:
-                    # Model tried native function calling — nudge it back to ReAct text format
                     current_prompt = (
                         "You must NOT use function calling. Instead, use the ReAct text format:\n"
                         "Thought: <reasoning>\n"
@@ -149,7 +98,9 @@ class ConversationalAgent:
                     continue
                 raise
 
-            text = _safe_text(response)
+            # Append the exchange to chat history for next iteration
+            chat_history.append({"role": "user", "parts": [current_prompt]})
+            chat_history.append({"role": "assistant", "parts": [text]})
 
             if not text.strip():
                 logger.warning(f"ReAct iter {iteration}: empty response from model, nudging")
@@ -256,12 +207,12 @@ class ConversationalAgent:
         else:
             # Max iterations exhausted — force a final answer
             logger.warning(f"ReAct loop exhausted {self.max_iterations} iterations, forcing answer")
-            response = chat.send_message(
+            force_prompt = (
                 "You have reached the maximum number of iterations. "
                 "Based on all the information gathered so far, provide your final Answer now.\n\n"
                 "Answer:"
             )
-            final_text = _safe_text(response)
+            final_text = self.llm.chat(chat_history, force_prompt, system=system)
             # Strip leading "Answer:" if model echoes it
             if final_text.strip().startswith("Answer:"):
                 final_text = final_text.strip()[7:].strip()
@@ -297,17 +248,13 @@ class ConversationalAgent:
     async def generate_title(self, first_message: str) -> str:
         """Generate a short session title from the first message."""
         try:
-            model = genai.GenerativeModel(self.llm_model)
             prompt = TITLE_PROMPT.format(message=first_message)
-            response = model.generate_content(prompt)
-            title = response.text.strip().strip('"').strip("'")
-            # Limit to reasonable length
+            title = self.llm.generate(prompt).strip().strip('"').strip("'")
             if len(title) > 80:
                 title = title[:77] + "..."
             return title
         except Exception as e:
             logger.warning(f"Title generation failed: {e}")
-            # Fallback: use first 50 chars of message
             return first_message[:50] + ("..." if len(first_message) > 50 else "")
 
     @staticmethod

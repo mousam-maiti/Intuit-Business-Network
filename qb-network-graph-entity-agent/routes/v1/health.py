@@ -20,6 +20,12 @@ async def health(request: Request):
         components["mcp_tools"] = len(mcp._tool_names)
     if llm_reasoner:
         components["llm"] = "connected" if llm_reasoner.available else "unavailable"
+    cfg = getattr(request.app.state, "cfg", None)
+    if cfg:
+        components["llm_provider"] = cfg.llm.provider
+        components["llm_model"] = cfg.llm.model
+        components["embedding_provider"] = cfg.embedding.provider
+        components["embedding_model"] = cfg.embedding.model
 
     overall = "healthy" if resolution_svc else "starting"
     return {

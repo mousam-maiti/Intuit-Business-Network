@@ -1,49 +1,9 @@
-"""Tests for ConversationalAgent (mocked — no real Gemini calls)."""
+"""Tests for ConversationalAgent (mocked — no real LLM calls)."""
 import json
 import pytest
 
-from chat.agent import ConversationalAgent, _map_type
-from chat.prompts import TOOL_DECLARATIONS, TOOL_LABELS
-
-
-class TestToolDeclarations:
-    def test_all_six_tools_declared(self):
-        names = {td["name"] for td in TOOL_DECLARATIONS}
-        assert names == {
-            "search_entities", "describe_entity", "query_network",
-            "aggregate_stats", "search_by_relationship", "get_merge_history",
-        }
-
-    def test_all_tools_have_labels(self):
-        for td in TOOL_DECLARATIONS:
-            assert td["name"] in TOOL_LABELS
-
-    def test_declarations_have_required_fields(self):
-        for td in TOOL_DECLARATIONS:
-            assert "name" in td
-            assert "description" in td
-            assert "parameters" in td
-            assert "properties" in td["parameters"]
-            assert "required" in td["parameters"]
-            assert len(td["parameters"]["required"]) >= 1
-
-
-class TestMapType:
-    def test_string(self):
-        import google.generativeai as genai
-        assert _map_type("string") == genai.protos.Type.STRING
-
-    def test_integer(self):
-        import google.generativeai as genai
-        assert _map_type("integer") == genai.protos.Type.INTEGER
-
-    def test_number(self):
-        import google.generativeai as genai
-        assert _map_type("number") == genai.protos.Type.NUMBER
-
-    def test_unknown_defaults_to_string(self):
-        import google.generativeai as genai
-        assert _map_type("foobar") == genai.protos.Type.STRING
+from chat.agent import ConversationalAgent
+from chat.prompts import TOOL_LABELS
 
 
 class TestParseResponse:
@@ -74,19 +34,14 @@ class TestParseResponse:
         assert result["content"] == text
 
 
-class TestBuildTools:
-    def test_builds_without_error(self):
-        tools = ConversationalAgent._build_tools()
-        assert len(tools) == 1  # Single Tool proto with all declarations
-        func_decls = tools[0].function_declarations
-        assert len(func_decls) == 6
-
-
 class TestAgentInit:
     def test_init(self, mock_mcp):
+        class MockLLM:
+            model_name = "test-model"
+            available = True
         agent = ConversationalAgent(
-            mcp=mock_mcp, llm_model="gemini-2.5-flash",
-            temperature=0.3, max_tool_calls=5,
+            mcp=mock_mcp, llm=MockLLM(),
+            max_iterations=8,
         )
-        assert agent.llm_model == "gemini-2.5-flash"
-        assert agent.max_tool_calls == 5
+        assert agent.llm.model_name == "test-model"
+        assert agent.max_iterations == 8

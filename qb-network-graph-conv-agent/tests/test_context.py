@@ -59,7 +59,7 @@ class TestContextWindow:
         session = mock_db.get_session("s-1")
         import asyncio
         result = asyncio.get_event_loop().run_until_complete(
-            context_window.maybe_compress(session, "gemini-2.5-flash")
+            context_window.maybe_compress(session)
         )
         assert result is False
 
